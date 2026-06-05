@@ -29,6 +29,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+dev-server*.log
+dev-server*.err.log
+backend/dev-server*.log
+backend/dev-server*.err.log
+
+# generated verification artifacts
+artifacts/
 
 # env files (can opt-in for committing if needed)
 .env*
