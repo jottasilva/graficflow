@@ -139,18 +139,59 @@ export type UserAccount = {
 
 export type Product = {
   id: string;
+  sku?: string;
   name: string;
   category: string;
+  subcategory?: string;
   sector: string;
+  description?: string;
+  commercialDescription?: string;
+  complementaryDescription?: string;
+  gtin?: string;
+  brand?: string;
   thumbnailUrl?: string;
   availableColors: string[];
   price: number;
+  costPrice?: number;
+  markupPercent?: number;
+  minSalePrice?: number;
+  priceTable?: string;
   minOrderQty: number;
   minFractionQty: number;
   allowsFractions: boolean;
   stockItem: string;
+  stockQty?: number;
+  stockMin?: number;
+  stockUnit?: string;
+  commercialUnit?: string;
+  conversionFactor?: string;
+  netWeightKg?: string;
+  grossWeightKg?: string;
+  packageDimensionsCm?: string;
+  storageLocation?: string;
+  tracksBatch?: boolean;
+  fiscal?: ProductFiscalData;
+  isResale?: boolean;
+  internalNotes?: string;
   leadTime: string;
   active: boolean;
+  saleBlocked?: boolean;
+};
+
+export type ProductFiscalData = {
+  ncm: string;
+  cest: string;
+  origin: string;
+  cfop: string;
+  icmsCstCsosn: string;
+  pisCst: string;
+  cofinsCst: string;
+  ipiCst: string;
+  icmsRate: string;
+  pisRate: string;
+  cofinsRate: string;
+  ipiRate: string;
+  additionalInfo: string;
 };
 
 export const DEFAULT_PRODUCT_COLORS = ["Azul", "Verde", "Preto", "Branco"];

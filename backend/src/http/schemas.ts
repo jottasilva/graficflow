@@ -100,36 +100,110 @@ export const updateClientSchema = clientSchemaBase
   .partial()
   .refine((value) => Object.keys(value).length > 0, "Informe ao menos um campo para atualizar.");
 
-export const createProductSchema = z.object({
-  tenantId: idSchema,
-  sectorId: idSchema.optional(),
-  sectorName: z.string().trim().min(2).max(120).optional(),
-  sku: z.string().trim().min(2).max(80),
-  name: z.string().trim().min(2).max(180),
-  category: z.string().trim().min(2).max(120).default("Geral"),
-  description: z.string().trim().max(4000).optional(),
-  thumbnailUrl: z.string().trim().url().optional().or(z.literal("")),
-  priceCost: moneySchema.optional(),
-  priceSale: moneySchema,
-  unitType: z.string().trim().min(1).max(24).default("un"),
-  stockQty: z.coerce.number().nonnegative().default(0),
-  stockMin: z.coerce.number().nonnegative().default(0),
-  stockMax: z.coerce.number().nonnegative().optional(),
-  trackStock: z.boolean().default(true),
-  allowFractional: z.boolean().default(false),
-  minOrderQty: z.coerce.number().positive().default(1),
-  minFractionQty: z.coerce.number().positive().default(1),
-  tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
-  attributes: z.record(z.string(), z.unknown()).default({}),
-  isActive: z.boolean().default(true),
-  isFeatured: z.boolean().default(false),
+const nfeUnitSchema = z
+  .string()
+  .trim()
+  .transform((value) => value.toUpperCase())
+  .refine((value) => ["UN", "PC", "KG", "G", "CX", "PCT", "L", "ML", "M", "M2", "M3", "T"].includes(value), {
+    message: "Unidade nao reconhecida para NF-e.",
+  });
+
+const fiscalRateSchema = z.string().trim().regex(/^\d+(\.\d+)?$/, "Aliquota deve ser numerica e usar ponto decimal.");
+const optionalFiscalRateSchema = z.string().trim().regex(/^\d+(\.\d+)?$/, "Aliquota deve ser numerica e usar ponto decimal.").optional().or(z.literal(""));
+const decimalStringSchema = z.string().trim().regex(/^\d+(\.\d{1,3})?$/, "Use ponto decimal, exemplo 0.500.").optional().or(z.literal(""));
+
+const productFiscalSchema = z.object({
+  ncm: z.string().trim().regex(/^\d{8}$/, "NCM deve conter exatamente 8 digitos."),
+  cest: z.string().trim().max(12).optional().or(z.literal("")),
+  origin: z.string().trim().regex(/^[0-8]$/, "Origem deve ser um codigo de 0 a 8."),
+  cfop: z.string().trim().regex(/^[567]\d{3}$/, "CFOP deve ter 4 digitos e iniciar com 5, 6 ou 7."),
+  icmsCstCsosn: z.string().trim().min(2).max(4),
+  pisCst: z.string().trim().min(2).max(4),
+  cofinsCst: z.string().trim().min(2).max(4),
+  ipiCst: z.string().trim().max(4).optional().or(z.literal("")),
+  icmsRate: fiscalRateSchema,
+  pisRate: fiscalRateSchema,
+  cofinsRate: fiscalRateSchema,
+  ipiRate: optionalFiscalRateSchema,
+  additionalInfo: z.string().trim().max(600).optional().or(z.literal("")),
 });
+
+const productAttributesSchema = z
+  .object({
+    leadTime: z.string().trim().max(80).optional(),
+    availableColors: z.array(z.string().trim().min(1).max(40)).max(40).optional(),
+    subcategory: z.string().trim().max(120).optional().or(z.literal("")),
+    commercialDescription: z.string().trim().min(1).max(120).optional(),
+    complementaryDescription: z.string().trim().max(500).optional().or(z.literal("")),
+    gtin: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .refine((value) => value === "SEM GTIN" || /^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(value), {
+        message: "GTIN deve ter 8, 12, 13 ou 14 digitos, ou SEM GTIN.",
+      })
+      .optional(),
+    brand: z.string().trim().max(120).optional().or(z.literal("")),
+    markupPercent: z.coerce.number().nonnegative().optional(),
+    minSalePrice: moneySchema.optional(),
+    priceTable: z.string().trim().max(120).optional().or(z.literal("")),
+    stockUnit: nfeUnitSchema.optional(),
+    commercialUnit: nfeUnitSchema.optional(),
+    conversionFactor: z.string().trim().max(80).optional().or(z.literal("")),
+    netWeightKg: decimalStringSchema,
+    grossWeightKg: decimalStringSchema,
+    packageDimensionsCm: z.string().trim().max(60).optional().or(z.literal("")),
+    storageLocation: z.string().trim().max(120).optional().or(z.literal("")),
+    tracksBatch: z.boolean().optional(),
+    fiscal: productFiscalSchema.optional(),
+    isResale: z.boolean().optional(),
+    internalNotes: z.string().trim().max(800).optional().or(z.literal("")),
+    saleBlocked: z.boolean().optional(),
+  })
+  .passthrough();
+
+export const createProductSchema = z
+  .object({
+    tenantId: idSchema,
+    sectorId: idSchema.optional(),
+    sectorName: z.string().trim().min(2).max(120).optional(),
+    sku: z.string().trim().min(1).max(60),
+    name: z.string().trim().min(2).max(180),
+    category: z.string().trim().min(2).max(120).default("Geral"),
+    description: z.string().trim().max(4000).optional(),
+    thumbnailUrl: z.string().trim().url().optional().or(z.literal("")),
+    priceCost: moneySchema,
+    priceSale: moneySchema,
+    unitType: nfeUnitSchema.default("UN"),
+    stockQty: z.coerce.number().nonnegative().default(0),
+    stockMin: z.coerce.number().nonnegative().default(0),
+    stockMax: z.coerce.number().nonnegative().optional(),
+    trackStock: z.boolean().default(true),
+    allowFractional: z.boolean().default(false),
+    minOrderQty: z.coerce.number().positive().default(1),
+    minFractionQty: z.coerce.number().positive().default(1),
+    tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+    attributes: productAttributesSchema,
+    isActive: z.boolean().default(true),
+    isFeatured: z.boolean().default(false),
+  })
+  .superRefine((input, context) => {
+    if (!input.attributes.fiscal) {
+      context.addIssue({ code: "custom", path: ["attributes", "fiscal"], message: "Dados fiscais sao obrigatorios para NF-e." });
+    }
+    if (!input.attributes.commercialDescription) {
+      context.addIssue({ code: "custom", path: ["attributes", "commercialDescription"], message: "Descricao comercial e obrigatoria." });
+    }
+    if (!input.attributes.gtin) {
+      context.addIssue({ code: "custom", path: ["attributes", "gtin"], message: "GTIN/EAN e obrigatorio. Use SEM GTIN quando nao houver codigo." });
+    }
+  });
 
 export const updateProductSchema = z
   .object({
     sectorId: idSchema.nullable().optional(),
     sectorName: z.string().trim().min(2).max(120).nullable().optional(),
-    sku: z.string().trim().min(2).max(80).optional(),
+    sku: z.string().trim().min(1).max(60).optional(),
     name: z.string().trim().min(2).max(180).optional(),
     category: z.string().trim().min(2).max(120).optional(),
     description: z.string().trim().max(4000).nullable().optional(),
@@ -145,7 +219,7 @@ export const updateProductSchema = z
     minOrderQty: z.coerce.number().positive().optional(),
     minFractionQty: z.coerce.number().positive().optional(),
     tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
-    attributes: z.record(z.string(), z.unknown()).optional(),
+    attributes: productAttributesSchema.optional(),
     isActive: z.boolean().optional(),
     isFeatured: z.boolean().optional(),
   })

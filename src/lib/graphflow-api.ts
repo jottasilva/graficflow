@@ -10,6 +10,7 @@ import type {
   OrderStatus,
   Priority,
   Product,
+  ProductFiscalData,
   Quote,
   QuoteItem,
   QuoteStatus,
@@ -107,17 +108,21 @@ type CustomerDto = ClientPayload & {
 
 type ProductDto = {
   id: string;
+  sku?: string | null;
   name: string;
   category: string | null;
+  description?: string | null;
   thumbnailUrl?: string | null;
   sectorId?: string | null;
   sectorName?: string | null;
+  priceCost?: number | string | null;
   priceSale: number | string | null;
+  unitType?: string | null;
   minOrderQty: number | string | null;
   minFractionQty: number | string | null;
   allowFractional: boolean | null;
   stockQty?: number | string | null;
-  unitType?: string | null;
+  stockMin?: number | string | null;
   attributes?: Record<string, unknown> | null;
   isActive: boolean | null;
 };
@@ -338,21 +343,68 @@ function mapProduct(product: ProductDto): Product {
         .filter((color): color is string => typeof color === "string" && color.trim().length > 0)
         .map((color) => color.trim())
     : DEFAULT_PRODUCT_COLORS;
+  const attributes = product.attributes ?? {};
+  const fiscal = fiscalMetadata(attributes.fiscal);
 
   return {
     id: product.id,
+    sku: product.sku ?? product.id,
     name: product.name,
     category: product.category ?? "Geral",
+    subcategory: stringMetadata(attributes, "subcategory"),
     sector: product.sectorName ?? "",
+    description: product.description ?? "",
+    commercialDescription: stringMetadata(attributes, "commercialDescription") || product.name,
+    complementaryDescription: stringMetadata(attributes, "complementaryDescription"),
+    gtin: stringMetadata(attributes, "gtin") || "SEM GTIN",
+    brand: stringMetadata(attributes, "brand"),
     thumbnailUrl: product.thumbnailUrl ?? "",
     availableColors: availableColors.length ? availableColors : DEFAULT_PRODUCT_COLORS,
     price: numeric(product.priceSale),
+    costPrice: numeric(product.priceCost),
+    markupPercent: numericMetadata(attributes, "markupPercent"),
+    minSalePrice: numericMetadata(attributes, "minSalePrice"),
+    priceTable: stringMetadata(attributes, "priceTable"),
     minOrderQty: numeric(product.minOrderQty) || 1,
     minFractionQty: numeric(product.minFractionQty) || 1,
     allowsFractions: Boolean(product.allowFractional),
     stockItem: product.name,
+    stockQty: numeric(product.stockQty),
+    stockMin: numeric(product.stockMin),
+    stockUnit: stringMetadata(attributes, "stockUnit") || product.unitType || "UN",
+    commercialUnit: product.unitType || stringMetadata(attributes, "commercialUnit") || "UN",
+    conversionFactor: stringMetadata(attributes, "conversionFactor"),
+    netWeightKg: stringMetadata(attributes, "netWeightKg"),
+    grossWeightKg: stringMetadata(attributes, "grossWeightKg"),
+    packageDimensionsCm: stringMetadata(attributes, "packageDimensionsCm"),
+    storageLocation: stringMetadata(attributes, "storageLocation"),
+    tracksBatch: attributes.tracksBatch === true,
+    fiscal,
+    isResale: attributes.isResale === true,
+    internalNotes: stringMetadata(attributes, "internalNotes"),
     leadTime: String(product.attributes?.leadTime ?? ""),
     active: product.isActive !== false,
+    saleBlocked: attributes.saleBlocked === true,
+  };
+}
+
+function fiscalMetadata(value: unknown): ProductFiscalData {
+  const fiscal = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  return {
+    ncm: typeof fiscal.ncm === "string" ? fiscal.ncm : "",
+    cest: typeof fiscal.cest === "string" ? fiscal.cest : "",
+    origin: typeof fiscal.origin === "string" ? fiscal.origin : "0",
+    cfop: typeof fiscal.cfop === "string" ? fiscal.cfop : "5102",
+    icmsCstCsosn: typeof fiscal.icmsCstCsosn === "string" ? fiscal.icmsCstCsosn : "",
+    pisCst: typeof fiscal.pisCst === "string" ? fiscal.pisCst : "",
+    cofinsCst: typeof fiscal.cofinsCst === "string" ? fiscal.cofinsCst : "",
+    ipiCst: typeof fiscal.ipiCst === "string" ? fiscal.ipiCst : "",
+    icmsRate: typeof fiscal.icmsRate === "string" ? fiscal.icmsRate : "",
+    pisRate: typeof fiscal.pisRate === "string" ? fiscal.pisRate : "",
+    cofinsRate: typeof fiscal.cofinsRate === "string" ? fiscal.cofinsRate : "",
+    ipiRate: typeof fiscal.ipiRate === "string" ? fiscal.ipiRate : "",
+    additionalInfo: typeof fiscal.additionalInfo === "string" ? fiscal.additionalInfo : "",
   };
 }
 
@@ -372,6 +424,11 @@ function mapInventory(item: InventoryDto): InventoryItem {
 function stringMetadata(metadata: Record<string, unknown> | null | undefined, key: string): string {
   const value = metadata?.[key];
   return typeof value === "string" ? value : "";
+}
+
+function numericMetadata(metadata: Record<string, unknown> | null | undefined, key: string): number {
+  const value = metadata?.[key];
+  return typeof value === "number" || typeof value === "string" ? numeric(value) : 0;
 }
 
 function mapSector(sector: SectorDto): Sector {
@@ -579,6 +636,33 @@ function userMetadata(input: Partial<UserAccount>): Record<string, unknown> {
     pixKey: input.pixKey,
     notes: input.notes,
     profileComplete: input.profileComplete,
+  };
+}
+
+function productAttributes(input: Partial<Product>): Record<string, unknown> {
+  return {
+    leadTime: input.leadTime ?? "",
+    availableColors: input.availableColors ?? DEFAULT_PRODUCT_COLORS,
+    subcategory: input.subcategory,
+    commercialDescription: input.commercialDescription,
+    complementaryDescription: input.complementaryDescription,
+    gtin: input.gtin,
+    brand: input.brand,
+    markupPercent: input.markupPercent,
+    minSalePrice: input.minSalePrice,
+    priceTable: input.priceTable,
+    stockUnit: input.stockUnit,
+    commercialUnit: input.commercialUnit,
+    conversionFactor: input.conversionFactor,
+    netWeightKg: input.netWeightKg,
+    grossWeightKg: input.grossWeightKg,
+    packageDimensionsCm: input.packageDimensionsCm,
+    storageLocation: input.storageLocation,
+    tracksBatch: input.tracksBatch,
+    fiscal: input.fiscal,
+    isResale: input.isResale,
+    internalNotes: input.internalNotes,
+    saleBlocked: input.saleBlocked,
   };
 }
 
@@ -883,25 +967,28 @@ export const graphflowApi = {
   },
 
   async createProduct(input: Product, sectorId?: string): Promise<Product> {
+    const attributes = productAttributes(input);
     const product = await request<ProductDto>("/api/products", {
       method: "POST",
       body: JSON.stringify({
         tenantId: GRAPHFLOW_TENANT_ID,
-        sku: input.id || `SKU-${Date.now()}`,
+        sku: input.sku || input.id || `SKU-${Date.now()}`,
         name: input.name,
         category: input.category,
+        description: input.description,
         sectorId,
         sectorName: input.sector,
         thumbnailUrl: input.thumbnailUrl ?? "",
+        priceCost: input.costPrice ?? 0,
         priceSale: input.price,
-        unitType: "un",
-        stockQty: 0,
-        stockMin: 0,
+        unitType: input.commercialUnit ?? "UN",
+        stockQty: input.stockQty ?? 0,
+        stockMin: input.stockMin ?? 0,
         allowFractional: input.allowsFractions,
         minOrderQty: input.minOrderQty,
         minFractionQty: input.minFractionQty,
         isActive: input.active,
-        attributes: { leadTime: input.leadTime, availableColors: input.availableColors },
+        attributes,
       }),
     });
 
@@ -909,23 +996,27 @@ export const graphflowApi = {
   },
 
   async updateProduct(id: string, input: Partial<Product>, sectorId?: string): Promise<Product> {
+    const attributes = productAttributes(input);
     const product = await request<ProductDto>(`/api/products/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify({
+        sku: input.sku,
         name: input.name,
         category: input.category,
+        description: input.description,
         sectorId,
         sectorName: input.sector,
         thumbnailUrl: input.thumbnailUrl,
+        priceCost: input.costPrice,
         priceSale: input.price,
+        unitType: input.commercialUnit,
+        stockQty: input.stockQty,
+        stockMin: input.stockMin,
         allowFractional: input.allowsFractions,
         minOrderQty: input.minOrderQty,
         minFractionQty: input.minFractionQty,
         isActive: input.active,
-        attributes: {
-          leadTime: input.leadTime ?? "",
-          availableColors: input.availableColors ?? DEFAULT_PRODUCT_COLORS,
-        },
+        attributes,
       }),
     });
 

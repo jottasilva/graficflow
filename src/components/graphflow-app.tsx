@@ -9,6 +9,7 @@ import {
   Boxes,
   Building2,
   CalendarDays,
+  ChartNoAxesColumn,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -25,9 +26,13 @@ import {
   Factory,
   FileText,
   Folder,
+  Funnel,
   GripVertical,
   Home,
   Layers3,
+  LayoutGrid,
+  LayoutList,
+  Lightbulb,
   Link2,
   LockKeyhole,
   LogOut,
@@ -87,6 +92,7 @@ import {
   type OrderArtFile,
   type OrderStatus,
   type Product,
+  type ProductFiscalData,
   type Quote,
   type QuoteItem,
   type QuoteStatus,
@@ -163,18 +169,41 @@ type UserDraft = {
   password: string;
 };
 
-type ProductDraft = Pick<
-  Product,
-  | "name"
-  | "category"
-  | "sector"
-  | "thumbnailUrl"
-  | "price"
-  | "minOrderQty"
-  | "minFractionQty"
-  | "allowsFractions"
-  | "stockItem"
-> & {
+type ProductDraft = {
+  sku: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  sector: string;
+  description: string;
+  commercialDescription: string;
+  complementaryDescription: string;
+  gtin: string;
+  brand: string;
+  thumbnailUrl: string;
+  price: number;
+  costPrice: number;
+  markupPercent: number;
+  minSalePrice: number;
+  priceTable: string;
+  minOrderQty: number;
+  minFractionQty: number;
+  allowsFractions: boolean;
+  stockItem: string;
+  stockQty: number;
+  stockMin: number;
+  stockUnit: string;
+  commercialUnit: string;
+  conversionFactor: string;
+  netWeightKg: string;
+  grossWeightKg: string;
+  packageDimensionsCm: string;
+  storageLocation: string;
+  tracksBatch: boolean;
+  fiscal: ProductFiscalData;
+  isResale: boolean;
+  internalNotes: string;
+  saleBlocked: boolean;
   availableColorsText: string;
 };
 
@@ -293,6 +322,157 @@ function parseAvailableColors(value: string) {
   return colors.length ? Array.from(new Set(colors)) : DEFAULT_PRODUCT_COLORS;
 }
 
+const nfeUnits = new Set(["UN", "PC", "KG", "G", "CX", "PCT", "L", "ML", "M", "M2", "M3", "T"]);
+
+function normalizeSku(value: string) {
+  return value.trim().slice(0, 60);
+}
+
+function normalizeGtin(value: string) {
+  const trimmed = value.trim().toUpperCase();
+  return trimmed || "SEM GTIN";
+}
+
+function validateProductFiscalDraft(draft: ProductDraft) {
+  const missing: string[] = [];
+  const invalid: string[] = [];
+  const alerts: string[] = [];
+  const fiscal = draft.fiscal;
+  const requiredFields: Array<[string, string | number]> = [
+    ["Codigo interno / SKU", draft.sku],
+    ["Descricao comercial", draft.commercialDescription],
+    ["GTIN/EAN", draft.gtin],
+    ["NCM", fiscal.ncm],
+    ["Origem da mercadoria", fiscal.origin],
+    ["CFOP padrao saida", fiscal.cfop],
+    ["CST / CSOSN ICMS", fiscal.icmsCstCsosn],
+    ["CST PIS", fiscal.pisCst],
+    ["CST COFINS", fiscal.cofinsCst],
+    ["Aliquota ICMS", fiscal.icmsRate],
+    ["Aliquota PIS", fiscal.pisRate],
+    ["Aliquota COFINS", fiscal.cofinsRate],
+    ["Unidade comercial", draft.commercialUnit],
+    ["Unidade de estoque", draft.stockUnit],
+    ["Preco de venda", draft.price],
+    ["Preco de custo", draft.costPrice],
+    ["Estoque atual", draft.stockQty],
+    ["Estoque minimo", draft.stockMin],
+  ];
+
+  requiredFields.forEach(([label, value]) => {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || value < 0) missing.push(label);
+      return;
+    }
+    if (!String(value ?? "").trim()) missing.push(label);
+  });
+
+  if (normalizeSku(draft.sku).length > 60) invalid.push("SKU deve ter no maximo 60 caracteres.");
+  if (draft.commercialDescription.trim().length > 120) invalid.push("Descricao comercial deve ter no maximo 120 caracteres.");
+  if (!/^\d{8}$/.test(fiscal.ncm.trim())) invalid.push("NCM deve conter exatamente 8 digitos numericos.");
+  if (!/^(SEM GTIN|\d{8}|\d{12}|\d{13}|\d{14})$/.test(normalizeGtin(draft.gtin))) {
+    invalid.push("GTIN/EAN deve ter 8, 12, 13 ou 14 digitos, ou SEM GTIN.");
+  }
+  if (!/^[567]\d{3}$/.test(fiscal.cfop.trim())) invalid.push("CFOP deve ter 4 digitos e iniciar com 5, 6 ou 7.");
+  if (!/^[0-8]$/.test(fiscal.origin.trim())) invalid.push("Origem da mercadoria deve ser um codigo de 0 a 8.");
+
+  [
+    ["Aliquota ICMS", fiscal.icmsRate],
+    ["Aliquota PIS", fiscal.pisRate],
+    ["Aliquota COFINS", fiscal.cofinsRate],
+    ["Aliquota IPI", fiscal.ipiRate],
+  ].forEach(([label, value]) => {
+    const raw = String(value).trim();
+    if (raw && !/^\d+(\.\d+)?$/.test(raw)) invalid.push(`${label} deve ser numerica e usar ponto decimal.`);
+  });
+
+  [draft.commercialUnit, draft.stockUnit].forEach((unit) => {
+    if (unit && !nfeUnits.has(unit.trim().toUpperCase())) {
+      invalid.push(`Unidade ${unit} nao esta na lista reconhecida para NF-e.`);
+    }
+  });
+
+  [
+    ["Peso liquido", draft.netWeightKg],
+    ["Peso bruto", draft.grossWeightKg],
+  ].forEach(([label, value]) => {
+    const raw = String(value).trim();
+    if (raw.includes(",")) invalid.push(`${label} deve usar ponto como separador decimal.`);
+    if (raw && !/^\d+(\.\d{1,3})?$/.test(raw)) invalid.push(`${label} deve ser numerico, exemplo 0.500.`);
+  });
+
+  if (!fiscal.cest.trim()) alerts.push("CEST vazio: preencha se houver ICMS-ST.");
+  if (!draft.netWeightKg.trim()) alerts.push("Peso liquido vazio: recomendado para NF-e com frete.");
+  if (!draft.grossWeightKg.trim()) alerts.push("Peso bruto vazio: recomendado para cotacao e frete.");
+  if (!draft.storageLocation.trim()) alerts.push("Local de armazenagem vazio.");
+
+  return { missing, invalid, alerts, ready: missing.length === 0 && invalid.length === 0 };
+}
+
+function productFromDraft(draft: ProductDraft, id: string): Product {
+  return {
+    id,
+    sku: normalizeSku(draft.sku) || id,
+    name: draft.name.trim(),
+    category: draft.category.trim() || "Geral",
+    subcategory: draft.subcategory.trim(),
+    sector: draft.sector,
+    description: draft.description.trim(),
+    commercialDescription: draft.commercialDescription.trim() || draft.name.trim(),
+    complementaryDescription: draft.complementaryDescription.trim(),
+    gtin: normalizeGtin(draft.gtin),
+    brand: draft.brand.trim(),
+    thumbnailUrl: draft.thumbnailUrl,
+    availableColors: parseAvailableColors(draft.availableColorsText),
+    price: draft.price,
+    costPrice: draft.costPrice,
+    markupPercent: draft.markupPercent,
+    minSalePrice: draft.minSalePrice,
+    priceTable: draft.priceTable.trim(),
+    minOrderQty: draft.minOrderQty,
+    minFractionQty: draft.minFractionQty,
+    allowsFractions: draft.allowsFractions,
+    stockItem: draft.stockItem,
+    stockQty: draft.stockQty,
+    stockMin: draft.stockMin,
+    stockUnit: draft.stockUnit.trim().toUpperCase(),
+    commercialUnit: draft.commercialUnit.trim().toUpperCase(),
+    conversionFactor: draft.conversionFactor.trim(),
+    netWeightKg: draft.netWeightKg.trim(),
+    grossWeightKg: draft.grossWeightKg.trim(),
+    packageDimensionsCm: draft.packageDimensionsCm.trim(),
+    storageLocation: draft.storageLocation.trim(),
+    tracksBatch: draft.tracksBatch,
+    fiscal: { ...draft.fiscal },
+    isResale: draft.isResale,
+    internalNotes: draft.internalNotes.trim(),
+    leadTime: "2 dias",
+    active: !draft.saleBlocked,
+    saleBlocked: draft.saleBlocked,
+  };
+}
+
+function productFiscalReady(product: Product) {
+  const fiscal = product.fiscal;
+  return Boolean(
+    product.sku &&
+      product.commercialDescription &&
+      product.gtin &&
+      fiscal &&
+      /^\d{8}$/.test(fiscal.ncm) &&
+      /^[0-8]$/.test(fiscal.origin) &&
+      /^[567]\d{3}$/.test(fiscal.cfop) &&
+      fiscal.icmsCstCsosn &&
+      fiscal.pisCst &&
+      fiscal.cofinsCst &&
+      fiscal.icmsRate &&
+      fiscal.pisRate &&
+      fiscal.cofinsRate &&
+      product.commercialUnit &&
+      product.stockUnit,
+  );
+}
+
 const defaultOrderDraft = (products: Product[], clients: Client[]): NewOrderDraft => ({
   customerId: clients[0]?.id ?? "",
   productId: products[0]?.id ?? "",
@@ -343,17 +523,58 @@ const defaultUserDraft: UserDraft = {
   password: "",
 };
 
+const defaultProductFiscal: ProductFiscalData = {
+  ncm: "",
+  cest: "",
+  origin: "0",
+  cfop: "5102",
+  icmsCstCsosn: "",
+  pisCst: "",
+  cofinsCst: "",
+  ipiCst: "",
+  icmsRate: "",
+  pisRate: "",
+  cofinsRate: "",
+  ipiRate: "",
+  additionalInfo: "",
+};
+
 const defaultProductDraft: ProductDraft = {
+  sku: "",
   name: "",
   category: "Papelaria",
+  subcategory: "",
   sector: "Impressão",
+  description: "",
+  commercialDescription: "",
+  complementaryDescription: "",
+  gtin: "SEM GTIN",
+  brand: "",
   thumbnailUrl: "",
   availableColorsText: DEFAULT_PRODUCT_COLORS.join(", "),
   price: 0,
+  costPrice: 0,
+  markupPercent: 0,
+  minSalePrice: 0,
+  priceTable: "",
   minOrderQty: 50,
   minFractionQty: 50,
   allowsFractions: true,
   stockItem: "Vinil Branco",
+  stockQty: 0,
+  stockMin: 0,
+  stockUnit: "UN",
+  commercialUnit: "UN",
+  conversionFactor: "",
+  netWeightKg: "",
+  grossWeightKg: "",
+  packageDimensionsCm: "",
+  storageLocation: "",
+  tracksBatch: false,
+  fiscal: defaultProductFiscal,
+  isResale: false,
+  internalNotes: "",
+  saleBlocked: false,
 };
 
 const defaultMachineDraft = (sectors: Sector[]): MachineDraft => ({
@@ -718,16 +939,41 @@ export function GraphFlowApp() {
 
   function productToDraft(product: Product): ProductDraft {
     return {
+      sku: product.sku ?? product.id,
       name: product.name,
       category: product.category,
+      subcategory: product.subcategory ?? "",
       sector: product.sector,
+      description: product.description ?? "",
+      commercialDescription: product.commercialDescription ?? product.name,
+      complementaryDescription: product.complementaryDescription ?? "",
+      gtin: product.gtin ?? "SEM GTIN",
+      brand: product.brand ?? "",
       thumbnailUrl: product.thumbnailUrl ?? "",
       availableColorsText: (product.availableColors?.length ? product.availableColors : DEFAULT_PRODUCT_COLORS).join(", "),
       price: product.price,
+      costPrice: product.costPrice ?? 0,
+      markupPercent: product.markupPercent ?? 0,
+      minSalePrice: product.minSalePrice ?? 0,
+      priceTable: product.priceTable ?? "",
       minOrderQty: product.minOrderQty,
       minFractionQty: product.minFractionQty,
       allowsFractions: product.allowsFractions,
       stockItem: product.stockItem,
+      stockQty: product.stockQty ?? 0,
+      stockMin: product.stockMin ?? 0,
+      stockUnit: product.stockUnit ?? "UN",
+      commercialUnit: product.commercialUnit ?? "UN",
+      conversionFactor: product.conversionFactor ?? "",
+      netWeightKg: product.netWeightKg ?? "",
+      grossWeightKg: product.grossWeightKg ?? "",
+      packageDimensionsCm: product.packageDimensionsCm ?? "",
+      storageLocation: product.storageLocation ?? "",
+      tracksBatch: product.tracksBatch ?? false,
+      fiscal: { ...defaultProductFiscal, ...(product.fiscal ?? {}) },
+      isResale: product.isResale ?? false,
+      internalNotes: product.internalNotes ?? "",
+      saleBlocked: product.saleBlocked ?? false,
     };
   }
 
@@ -1370,25 +1616,18 @@ export function GraphFlowApp() {
   async function createProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!productDraft.name.trim() || productDraft.price <= 0) {
+    const validation = validateProductFiscalDraft(productDraft);
+
+    if (!productDraft.name.trim() || productDraft.price <= 0 || !validation.ready) {
+      createNotification({
+        tone: "warning",
+        title: "Produto com pendencias fiscais",
+        message: [...validation.missing, ...validation.invalid].slice(0, 4).join("; ") || "Revise os campos obrigatorios.",
+      });
       return;
     }
 
-    const nextProduct: Product = {
-      id: `prod-${Date.now()}`,
-      name: productDraft.name,
-      category: productDraft.category,
-      sector: productDraft.sector,
-      thumbnailUrl: productDraft.thumbnailUrl,
-      availableColors: parseAvailableColors(productDraft.availableColorsText),
-      price: productDraft.price,
-      minOrderQty: productDraft.minOrderQty,
-      minFractionQty: productDraft.minFractionQty,
-      allowsFractions: productDraft.allowsFractions,
-      stockItem: productDraft.stockItem,
-      leadTime: "2 dias",
-      active: true,
-    };
+    const nextProduct = productFromDraft(productDraft, `prod-${Date.now()}`);
 
     if (graphflowApi.enabled()) {
       try {
@@ -1426,7 +1665,14 @@ export function GraphFlowApp() {
   async function saveProductEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!editingProductId || !productDraft.name.trim() || productDraft.price <= 0) {
+    const validation = validateProductFiscalDraft(productDraft);
+
+    if (!editingProductId || !productDraft.name.trim() || productDraft.price <= 0 || !validation.ready) {
+      createNotification({
+        tone: "warning",
+        title: "Produto com pendencias fiscais",
+        message: [...validation.missing, ...validation.invalid].slice(0, 4).join("; ") || "Revise os campos obrigatorios.",
+      });
       return;
     }
 
@@ -1436,18 +1682,7 @@ export function GraphFlowApp() {
       try {
         const savedProduct = await graphflowApi.updateProduct(
           editingProductId,
-          {
-            name: productDraft.name,
-            category: productDraft.category,
-            sector: productDraft.sector,
-            thumbnailUrl: productDraft.thumbnailUrl,
-            availableColors: parseAvailableColors(productDraft.availableColorsText),
-            price: productDraft.price,
-            minOrderQty: productDraft.minOrderQty,
-            minFractionQty: productDraft.minFractionQty,
-            allowsFractions: productDraft.allowsFractions,
-            stockItem: productDraft.stockItem,
-          },
+          productFromDraft(productDraft, editingProductId),
           selectedSector?.id,
         );
         setProducts((current) =>
@@ -1476,16 +1711,7 @@ export function GraphFlowApp() {
         product.id === editingProductId
           ? {
               ...product,
-              name: productDraft.name,
-              category: productDraft.category,
-              sector: productDraft.sector,
-              thumbnailUrl: productDraft.thumbnailUrl,
-              availableColors: parseAvailableColors(productDraft.availableColorsText),
-              price: productDraft.price,
-              minOrderQty: productDraft.minOrderQty,
-              minFractionQty: productDraft.minFractionQty,
-              allowsFractions: productDraft.allowsFractions,
-              stockItem: productDraft.stockItem,
+              ...productFromDraft(productDraft, editingProductId),
             }
           : product,
       ),
@@ -2914,9 +3140,16 @@ export function GraphFlowApp() {
           {dataLoading ? <div className="data-loading">Atualizando dados do banco...</div> : null}
           {view !== "quotes" && view !== "support" ? (
           <header className="page-header">
-            <div>
-              <h1>{currentCopy.title}</h1>
-              <p>{currentCopy.eyebrow}</p>
+            <div className={view === "orders" ? "page-title-with-icon" : undefined}>
+              {view === "orders" ? (
+                <span className="page-title-icon">
+                  <ClipboardList size={30} />
+                </span>
+              ) : null}
+              <div>
+                <h1>{currentCopy.title}</h1>
+                <p>{currentCopy.eyebrow}</p>
+              </div>
             </div>
             <div className="header-actions">
               <button
@@ -3085,6 +3318,7 @@ export function GraphFlowApp() {
             <SectorsView
               sectors={sectors}
               products={products}
+              onViewChange={setView}
               onUpdateSector={updateSector}
               onDeleteSector={deleteSector}
               onLinkProduct={linkProductToSector}
@@ -3719,6 +3953,69 @@ function DashboardView({
   );
 }
 
+function orderDueDate(order: Order): Date | null {
+  if (order.dueDate && /^\d{4}-\d{2}-\d{2}/.test(order.dueDate)) {
+    const date = new Date(`${order.dueDate.slice(0, 10)}T12:00:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const match = order.delivery.match(/^(\d{2})\/(\d{2})(?:\/(\d{4}))?$/);
+  if (!match) return null;
+
+  const year = Number(match[3] ?? new Date().getFullYear());
+  const date = new Date(year, Number(match[2]) - 1, Number(match[1]), 12, 0, 0);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function daysUntilOrder(order: Order) {
+  const dueDate = orderDueDate(order);
+  if (!dueDate) return null;
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  return Math.ceil((dueDate.getTime() - today.getTime()) / 86_400_000);
+}
+
+function orderDeliveryDetail(order: Order) {
+  if (order.status === "delivered") return "entregue";
+  const days = daysUntilOrder(order);
+  if (days === null) return "prazo a confirmar";
+  if (days < 0) return `${Math.abs(days)} dias atrasado`;
+  if (days === 0) return "vence hoje";
+  return `em ${days} dias`;
+}
+
+function percentText(value: number, total: number) {
+  if (!total) return "0%";
+  return `${((value / total) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+}
+
+function OrderMetricCard({
+  icon: Icon,
+  title,
+  value,
+  detail,
+  tone,
+}: {
+  icon: LucideIcon;
+  title: string;
+  value: string;
+  detail: string;
+  tone: string;
+}) {
+  return (
+    <article className="order-summary-card" style={{ "--order-tone": tone } as CSSProperties}>
+      <span>
+        <Icon size={28} />
+      </span>
+      <div>
+        <small>{title}</small>
+        <strong>{value}</strong>
+        <em>{detail}</em>
+      </div>
+    </article>
+  );
+}
+
 function OrdersView({
   orders,
   onCreateOrder,
@@ -3730,97 +4027,204 @@ function OrdersView({
   onOpenOrder: (orderId: string) => void;
   onUpdateStatus: (orderId: string) => void;
 }) {
+  const totalValue = orders.reduce((sum, order) => sum + order.total, 0);
+  const productionCount = orders.filter((order) => order.status === "production").length;
+  const deliveredCount = orders.filter((order) => order.status === "delivered").length;
+  const deliveryDays = orders
+    .map(daysUntilOrder)
+    .filter((days): days is number => typeof days === "number" && days >= 0);
+  const averageDelivery = deliveryDays.length
+    ? deliveryDays.reduce((sum, days) => sum + days, 0) / deliveryDays.length
+    : 0;
+
   return (
-    <section className="table-card">
-      <div className="table-toolbar">
-        <div>
-          <strong>{orders.length} pedidos</strong>
-          <span>Pipeline comercial e operacional</span>
+    <section className="orders-page">
+      <div className="orders-summary-grid">
+        <OrderMetricCard
+          icon={ClipboardList}
+          title="Total de pedidos"
+          value={formatNumber(orders.length)}
+          detail={`${percentText(orders.length, orders.length)} deste período`}
+          tone="#6b45ff"
+        />
+        <OrderMetricCard
+          icon={ChartNoAxesColumn}
+          title="Valor total"
+          value={formatCurrency(totalValue)}
+          detail={`${percentText(orders.length, orders.length)} deste período`}
+          tone="#18a957"
+        />
+        <OrderMetricCard
+          icon={Truck}
+          title="Em produção"
+          value={formatNumber(productionCount)}
+          detail={`${percentText(productionCount, orders.length)} do total`}
+          tone="#236dff"
+        />
+        <OrderMetricCard
+          icon={Package}
+          title="Entregues"
+          value={formatNumber(deliveredCount)}
+          detail={`${percentText(deliveredCount, orders.length)} do total`}
+          tone="#ff7208"
+        />
+        <OrderMetricCard
+          icon={CalendarDays}
+          title="Entrega média"
+          value={`${averageDelivery.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} dias`}
+          detail="Prazo estimado"
+          tone="#6b45ff"
+        />
+      </div>
+
+      <section className="table-card orders-table-card">
+        <div className="orders-table-toolbar">
+          <div>
+            <strong>{orders.length} pedidos</strong>
+            <span>Pipeline comercial e operacional</span>
+          </div>
+          <div className="orders-toolbar-actions">
+            <button className="ghost-button" type="button">
+              <Funnel size={17} />
+              Filtros
+            </button>
+            <div className="orders-view-toggle" aria-label="Alternar visualizacao">
+              <button className="active" type="button" title="Lista">
+                <LayoutList size={18} />
+              </button>
+              <button type="button" title="Grade">
+                <LayoutGrid size={18} />
+              </button>
+            </div>
+            <button className="primary-button" type="button" onClick={onCreateOrder}>
+              <Plus size={18} />
+              Novo Pedido
+            </button>
+          </div>
         </div>
-        <button className="primary-button" type="button" onClick={onCreateOrder}>
-          <Plus size={18} />
-          Novo Pedido
-        </button>
-      </div>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Pedido</th>
-              <th>Cliente</th>
-              <th>Produto</th>
-              <th>Status</th>
-              <th>Total</th>
-              <th>Entrega</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orders.map((order) => (
-              <tr
-                className="clickable-row"
-                key={order.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => onOpenOrder(order.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onOpenOrder(order.id);
-                  }
-                }}
-              >
-                <td>
-                  <strong>{order.number ?? order.id}</strong>
-                </td>
-                <td>{order.customer}</td>
-                <td>
-                  <div className="cell-stack">
-                    <span>{order.product}</span>
-                    <small>
-                      {formatNumber(order.quantity)} un
-                      {order.fractions.length ? ` · ${order.fractions.length} frações` : ""}
-                    </small>
-                  </div>
-                </td>
-                <td>
-                  <StatusPill status={order.status} />
-                </td>
-                <td>{formatCurrency(order.total)}</td>
-                <td>{order.delivery}</td>
-                <td>
-                  <div className="row-actions">
-                    <button
-                      className="icon-button"
-                      type="button"
-                      aria-label={`Editar pedido ${order.number ?? order.id}`}
-                      title="Editar pedido"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onOpenOrder(order.id);
-                      }}
-                    >
-                      <Pencil size={16} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      aria-label={`Avançar pedido ${order.number ?? order.id}`}
-                      title="Atualizar status"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onUpdateStatus(order.id);
-                      }}
-                    >
-                      <Check size={16} />
-                    </button>
-                  </div>
-                </td>
+
+        <div className="orders-table-scroll">
+          <table className="orders-table">
+            <thead>
+              <tr>
+                <th>Pedido</th>
+                <th>Cliente</th>
+                <th>Produto</th>
+                <th>Status</th>
+                <th>Total</th>
+                <th>Entrega</th>
+                <th>Ações</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {orders.map((order) => (
+                <tr
+                  className="clickable-row order-table-row"
+                  key={order.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpenOrder(order.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onOpenOrder(order.id);
+                    }
+                  }}
+                >
+                  <td>
+                    <div className="order-id-cell">
+                      <span>
+                        <FileText size={18} />
+                      </span>
+                      <div>
+                        <strong>{order.number ?? order.id}</strong>
+                        <small>24/05/2025 · 10:{String(Math.max(10, 35 - orders.indexOf(order) * 2)).padStart(2, "0")}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="order-client-cell">
+                      <Building2 size={15} />
+                      <span>{order.customer}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="cell-stack order-product-cell">
+                      <span>{order.product}</span>
+                      <small>{formatNumber(order.quantity)} un</small>
+                    </div>
+                  </td>
+                  <td>
+                    <StatusPill status={order.status} />
+                  </td>
+                  <td>
+                    <strong className="order-total-cell">{formatCurrency(order.total)}</strong>
+                  </td>
+                  <td>
+                    <div className="order-delivery-cell">
+                      <span>
+                        <CalendarDays size={15} />
+                        {order.delivery}
+                      </span>
+                      <small>{orderDeliveryDetail(order)}</small>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="row-actions order-row-actions">
+                      <button
+                        className="icon-button"
+                        type="button"
+                        aria-label={`Editar pedido ${order.number ?? order.id}`}
+                        title="Editar pedido"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenOrder(order.id);
+                        }}
+                      >
+                        <Pencil size={16} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        type="button"
+                        aria-label={`Avançar pedido ${order.number ?? order.id}`}
+                        title="Atualizar status"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onUpdateStatus(order.id);
+                        }}
+                      >
+                        <Check size={16} />
+                      </button>
+                      <button
+                        className="icon-button ghost-dots"
+                        type="button"
+                        aria-label={`Mais ações do pedido ${order.number ?? order.id}`}
+                        title="Mais ações"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <MoreVertical size={17} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="orders-pagination">
+          <span>Mostrando 1 a {orders.length} de {orders.length} pedidos</span>
+          <div>
+            <button className="icon-button" type="button" aria-label="Pagina anterior" disabled>
+              <ChevronLeft size={17} />
+            </button>
+            <button className="orders-page-number" type="button">1</button>
+            <button className="icon-button" type="button" aria-label="Proxima pagina" disabled={orders.length <= 6}>
+              <ChevronRight size={17} />
+            </button>
+          </div>
+        </div>
+      </section>
     </section>
   );
 }
@@ -5022,11 +5426,12 @@ function UserProfileDrawer({
                 accept="image/*"
                 type="file"
                 onChange={async (event) => {
+                  const input = event.currentTarget;
                   const file = event.target.files?.[0];
                   if (!file) return;
                   const uploaded = await onUploadFile(file, "users");
                   onDraftChange({ avatarUrl: uploaded.url });
-                  event.currentTarget.value = "";
+                  input.value = "";
                 }}
               />
             </label>
@@ -5282,45 +5687,52 @@ function ProductsView({
               <th>Mínimo</th>
               <th>Frações</th>
               <th>Estoque</th>
+              <th>NF-e</th>
               <th>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {products.map((product) => (
-              <tr key={product.id}>
-                <td>
-                  <strong>{product.name}</strong>
-                </td>
-                <td>{product.category}</td>
-                <td>{product.sector}</td>
-                <td>{formatCurrency(product.price)}</td>
-                <td>{formatNumber(product.minOrderQty)}</td>
-                <td>{product.allowsFractions ? `${formatNumber(product.minFractionQty)}+` : "Não"}</td>
-                <td>{product.stockItem}</td>
-                <td>
-                  <div className="row-actions">
-                    <button
-                      className="icon-button"
-                      type="button"
-                      aria-label={`Editar ${product.name}`}
-                      title="Editar produto"
-                      onClick={() => onEditProduct(product.id)}
-                    >
-                      <Pencil size={16} />
-                    </button>
-                    <button
-                      className="icon-button danger-action"
-                      type="button"
-                      aria-label={`Remover ${product.name}`}
-                      title="Remover produto"
-                      onClick={() => void onDeleteProduct(product.id)}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {products.map((product) => {
+              const ready = productFiscalReady(product);
+
+              return (
+                <tr key={product.id}>
+                  <td>
+                    <strong>{product.name}</strong>
+                    <small>{product.sku ?? product.id}</small>
+                  </td>
+                  <td>{product.category}</td>
+                  <td>{product.sector}</td>
+                  <td>{formatCurrency(product.price)}</td>
+                  <td>{formatNumber(product.minOrderQty)}</td>
+                  <td>{product.allowsFractions ? `${formatNumber(product.minFractionQty)}+` : "Não"}</td>
+                  <td>{product.stockItem}</td>
+                  <td>{ready ? <SuccessTag label="Apto" /> : <DangerTag label="Pendente" />}</td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        className="icon-button"
+                        type="button"
+                        aria-label={`Editar ${product.name}`}
+                        title="Editar produto"
+                        onClick={() => onEditProduct(product.id)}
+                      >
+                        <Pencil size={16} />
+                      </button>
+                      <button
+                        className="icon-button danger-action"
+                        type="button"
+                        aria-label={`Remover ${product.name}`}
+                        title="Remover produto"
+                        onClick={() => void onDeleteProduct(product.id)}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -5337,11 +5749,20 @@ function CatalogView({
 }) {
   return (
     <section className="catalog-grid">
-      {products.map((product) => (
-        <article className="catalog-card" key={product.id}>
-          <div className="product-visual" style={{ "--visual": visualColor(product.category) } as CSSProperties}>
-            <Package size={38} />
-          </div>
+      {products.map((product) => {
+        const productPhoto = product.thumbnailUrl || quoteProductImage(product);
+
+        return (
+          <article className="catalog-card" key={product.id}>
+          <div
+            className="product-visual product-photo"
+            style={
+              {
+                "--visual": visualColor(product.category),
+                backgroundImage: `linear-gradient(180deg, rgba(11, 16, 32, 0.02), rgba(11, 16, 32, 0.08)), url(${productPhoto})`,
+              } as CSSProperties
+            }
+          />
           <h3>{product.name}</h3>
           <p>{product.category} · {product.sector}</p>
           <div className="catalog-meta">
@@ -5354,7 +5775,8 @@ function CatalogView({
             Montar Pedido
           </button>
         </article>
-      ))}
+        );
+      })}
     </section>
   );
 }
@@ -5489,11 +5911,12 @@ function InventoryView({
                     accept="image/*"
                     type="file"
                     onChange={async (event) => {
+                      const input = event.currentTarget;
                       const file = event.target.files?.[0];
                       if (!file) return;
                       const uploaded = await onUploadFile(file, "inventory");
                       updateDraft(item, { imageUrl: uploaded.url });
-                      event.currentTarget.value = "";
+                      input.value = "";
                     }}
                   />
                 </label>
@@ -5834,12 +6257,14 @@ function MachinesView({
 function SectorsView({
   sectors,
   products,
+  onViewChange,
   onUpdateSector,
   onDeleteSector,
   onLinkProduct,
 }: {
   sectors: Sector[];
   products: Product[];
+  onViewChange: (view: ViewKey) => void;
   onUpdateSector: (
     sectorId: string,
     update: Partial<Pick<Sector, "name" | "capacity" | "sla" | "lead">>,
@@ -5849,6 +6274,8 @@ function SectorsView({
 }) {
   const [editingSector, setEditingSector] = useState<Sector | null>(null);
   const [linkDraft, setLinkDraft] = useState<Record<string, string>>({});
+  const sectorTones = ["#6b45ff", "#315dff", "#149954", "#ff7308"];
+  const sectorIcons = [ShoppingBag, Wrench, Settings, ClipboardList];
 
   function saveSector(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -5867,25 +6294,36 @@ function SectorsView({
   }
 
   return (
-    <section className="table-card sector-management-card">
-      <div className="table-toolbar">
+    <section className="table-card sector-management-card sector-reference-page">
+      <div className="sector-reference-header">
+        <span className="sector-reference-icon">
+          <LayoutGrid size={32} />
+        </span>
         <div>
           <strong>{sectors.length} setores</strong>
           <span>Capacidade, SLA e cadastros vinculados por área produtiva</span>
         </div>
+        <button className="ghost-button sector-report-button" type="button" onClick={() => onViewChange("reports")}>
+          <ChartNoAxesColumn size={18} />
+          Ver relatório geral
+        </button>
       </div>
 
       <div className="sector-management-grid">
-        {sectors.map((sector) => {
+        {sectors.map((sector, index) => {
           const linkedProducts = products.filter((product) => product.sector === sector.name);
           const availableProducts = products.filter((product) => product.sector !== sector.name);
           const selectedProductId = linkDraft[sector.id] ?? availableProducts[0]?.id ?? "";
           const isEditing = editingSector?.id === sector.id;
+          const tone = sectorTones[index % sectorTones.length];
+          const Icon = sectorIcons[index % sectorIcons.length];
 
           return (
-            <article className="operation-card sector-card" key={sector.id}>
-              <div className="card-head">
-                <span>{sector.orders} pedidos</span>
+            <article className="sector-card reference-sector-card" style={{ "--sector-tone": tone } as CSSProperties} key={sector.id}>
+              <div className="reference-sector-top">
+                <span className="reference-sector-icon">
+                  <Icon size={26} />
+                </span>
                 <div className="card-actions">
                   <button className="icon-button" type="button" title="Editar setor" onClick={() => setEditingSector(sector)}>
                     <Pencil size={16} />
@@ -5961,17 +6399,43 @@ function SectorsView({
                 </form>
               ) : (
                 <>
-                  <h3>{sector.name}</h3>
-                  <p>Lead médio {sector.lead} · SLA {sector.sla}</p>
-                  <ProgressBar value={sector.capacity} color="#5b45ff" />
-                  <div className="metric-strip">
+                  <div className="sector-main-row">
+                    <div>
+                      <span className="sector-orders-count">{sector.orders} pedidos</span>
+                      <h3>{sector.name}</h3>
+                      <p>Lead médio {sector.lead} · SLA {sector.sla} <i /></p>
+                    </div>
+                    <div
+                      className="capacity-ring"
+                      style={
+                        {
+                          background: `conic-gradient(${tone} ${sector.capacity * 3.6}deg, #e8ebf1 0deg)`,
+                        } as CSSProperties
+                      }
+                    >
+                      <span>
+                        <strong>{sector.capacity}%</strong>
+                        capacidade
+                      </span>
+                    </div>
+                  </div>
+
+                  <ProgressBar value={sector.capacity} color={tone} />
+
+                  <div className="sector-metric-grid">
                     <span>
-                      <strong>{sector.capacity}%</strong>
-                      capacidade
-                    </span>
-                    <span>
+                      <i>
+                        <ClipboardList size={20} />
+                      </i>
                       <strong>{linkedProducts.length}</strong>
                       cadastros
+                    </span>
+                    <span>
+                      <i>
+                        <RefreshCw size={20} />
+                      </i>
+                      <strong>{sector.sla || "0%"}</strong>
+                      SLA
                     </span>
                   </div>
 
@@ -5984,7 +6448,15 @@ function SectorsView({
                         ))}
                       </div>
                     ) : (
-                      <p>Nenhum cadastro vinculado.</p>
+                      <>
+                        <p>Nenhum cadastro vinculado.</p>
+                        <div className="sector-empty-state" aria-hidden="true">
+                          <FileText size={48} />
+                          <span>
+                            <X size={14} />
+                          </span>
+                        </div>
+                      </>
                     )}
                   </div>
 
@@ -6010,7 +6482,7 @@ function SectorsView({
                       )}
                     </select>
                     <button
-                      className="ghost-button compact"
+                      className="ghost-button compact sector-link-button"
                       type="button"
                       disabled={!selectedProductId}
                       onClick={() => {
@@ -6031,6 +6503,20 @@ function SectorsView({
             </article>
           );
         })}
+      </div>
+
+      <div className="sector-tip">
+        <span>
+          <Lightbulb size={30} />
+        </span>
+        <div>
+          <strong>Dica</strong>
+          <p>Mantenha os cadastros vinculados atualizados para garantir precisão nos indicadores de capacidade e SLA.</p>
+        </div>
+        <button className="ghost-button" type="button" onClick={() => onViewChange("reports")}>
+          Saiba mais
+          <ArrowUpRight size={16} />
+        </button>
       </div>
     </section>
   );
@@ -7085,6 +7571,7 @@ function FilesView({
                   <input
                     type="file"
                     onChange={async (event) => {
+                      const input = event.currentTarget;
                       const selected = event.target.files?.[0];
                       if (!selected) return;
                       const uploaded = await onUploadFile(selected, "files");
@@ -7097,7 +7584,7 @@ function FilesView({
                           size: `${(uploaded.size / 1024 / 1024).toFixed(2)} MB`,
                         },
                       }));
-                      event.currentTarget.value = "";
+                      input.value = "";
                     }}
                   />
                 </label>
@@ -7392,11 +7879,12 @@ function OrderForm({
             <input
               type="file"
               onChange={async (event) => {
+                const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
                 const uploaded = await onUploadFile(file, "orders");
                 onDraftChange({ ...draft, artFileName: uploaded.name, artFileUrl: uploaded.url });
-                event.currentTarget.value = "";
+                input.value = "";
               }}
             />
           </span>
@@ -7637,11 +8125,12 @@ function ClientForm({
               accept="image/*"
               type="file"
               onChange={async (event) => {
+                const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
                 const uploaded = await onUploadFile(file, "clients");
                 onDraftChange({ ...draft, avatarUrl: uploaded.url });
-                event.currentTarget.value = "";
+                input.value = "";
               }}
             />
           </span>
@@ -7765,11 +8254,12 @@ function UserForm({
               accept="image/*"
               type="file"
               onChange={async (event) => {
+                const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
                 const uploaded = await onUploadFile(file, "users");
                 onDraftChange({ ...draft, avatarUrl: uploaded.url });
-                event.currentTarget.value = "";
+                input.value = "";
               }}
             />
           </span>
@@ -7835,30 +8325,37 @@ function ProductForm({
   onDraftChange: (draft: ProductDraft) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const validation = validateProductFiscalDraft(draft);
+
+  function updateFiscal(update: Partial<ProductFiscalData>) {
+    onDraftChange({ ...draft, fiscal: { ...draft.fiscal, ...update } });
+  }
+
   return (
     <form className="modal-form" onSubmit={onSubmit}>
       <ModalHeader icon={Package} title={title} subtitle={subtitle} />
-      <div className="form-grid">
-        <TextField label="Nome" value={draft.name} onChange={(name) => onDraftChange({ ...draft, name })} required />
-        <TextField label="Categoria" value={draft.category} onChange={(category) => onDraftChange({ ...draft, category })} required />
-        <label>
-          Imagem do produto
-          <span className="upload-field">
-            <Upload size={16} />
-            <span>{draft.thumbnailUrl ? "Imagem enviada" : "Selecionar imagem"}</span>
-            <input
-              accept="image/*"
-              type="file"
-              onChange={async (event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                const uploaded = await onUploadFile(file, "products");
-                onDraftChange({ ...draft, thumbnailUrl: uploaded.url });
-                event.currentTarget.value = "";
-              }}
-            />
+
+      <div className={`nfe-diagnosis ${validation.ready ? "ready" : "blocked"}`}>
+        <ShieldCheck size={18} />
+        <div>
+          <strong>{validation.ready ? "Cadastro apto para emissao de NF-e" : "Cadastro com pendencias - NF-e bloqueada ate correcao"}</strong>
+          <span>
+            {validation.ready
+              ? validation.alerts.slice(0, 2).join(" | ") || "Campos fiscais obrigatorios preenchidos."
+              : [...validation.missing, ...validation.invalid].slice(0, 3).join(" | ")}
           </span>
-        </label>
+        </div>
+      </div>
+
+      <div className="form-grid client-form-grid product-fiscal-form">
+        <div className="form-section-title span-3">Identificacao</div>
+        <TextField label="Codigo interno / SKU" value={draft.sku} onChange={(sku) => onDraftChange({ ...draft, sku })} required />
+        <TextField label="Nome" value={draft.name} onChange={(name) => onDraftChange({ ...draft, name, commercialDescription: draft.commercialDescription || name })} required />
+        <TextField label="Descricao comercial" value={draft.commercialDescription} onChange={(commercialDescription) => onDraftChange({ ...draft, commercialDescription })} required />
+        <TextField label="GTIN/EAN" value={draft.gtin} placeholder="SEM GTIN" onChange={(gtin) => onDraftChange({ ...draft, gtin })} required />
+        <TextField label="Marca / Fabricante" value={draft.brand} onChange={(brand) => onDraftChange({ ...draft, brand })} />
+        <TextField label="Categoria" value={draft.category} onChange={(category) => onDraftChange({ ...draft, category })} required />
+        <TextField label="Subgrupo" value={draft.subcategory} onChange={(subcategory) => onDraftChange({ ...draft, subcategory })} />
         <label>
           Setor
           <select value={draft.sector} onChange={(event) => onDraftChange({ ...draft, sector: event.target.value })}>
@@ -7870,6 +8367,81 @@ function ProductForm({
           </select>
         </label>
         <label>
+          Imagem do produto
+          <span className="upload-field">
+            <Upload size={16} />
+            <span>{draft.thumbnailUrl ? "Imagem enviada" : "Selecionar imagem"}</span>
+            <input
+              accept="image/*"
+              type="file"
+              onChange={async (event) => {
+                const input = event.currentTarget;
+                const file = event.target.files?.[0];
+                if (!file) return;
+                const uploaded = await onUploadFile(file, "products");
+                onDraftChange({ ...draft, thumbnailUrl: uploaded.url });
+                input.value = "";
+              }}
+            />
+          </span>
+        </label>
+        <label className="span-2">
+          Descricao complementar
+          <textarea
+            value={draft.complementaryDescription}
+            maxLength={500}
+            onChange={(event) => onDraftChange({ ...draft, complementaryDescription: event.target.value })}
+          />
+        </label>
+
+        <div className="form-section-title span-3">Dados fiscais e tributarios</div>
+        <TextField label="NCM (8 digitos)" value={draft.fiscal.ncm} onChange={(ncm) => updateFiscal({ ncm })} required />
+        <TextField label="CEST" value={draft.fiscal.cest} onChange={(cest) => updateFiscal({ cest })} />
+        <label>
+          Origem
+          <select value={draft.fiscal.origin} onChange={(event) => updateFiscal({ origin: event.target.value })}>
+            <option value="0">0 - Nacional</option>
+            <option value="1">1 - Importacao direta</option>
+            <option value="2">2 - Importada mercado interno</option>
+            <option value="3">3 - Nacional acima 40%</option>
+            <option value="4">4 - Nacional PPB</option>
+            <option value="5">5 - Nacional abaixo 40%</option>
+            <option value="6">6 - Importada sem similar</option>
+            <option value="7">7 - Nacional acima 70%</option>
+            <option value="8">8 - Nacional acima 70% importado</option>
+          </select>
+        </label>
+        <TextField label="CFOP padrao saida" value={draft.fiscal.cfop} onChange={(cfop) => updateFiscal({ cfop })} required />
+        <TextField label="CST / CSOSN ICMS" value={draft.fiscal.icmsCstCsosn} onChange={(icmsCstCsosn) => updateFiscal({ icmsCstCsosn })} required />
+        <TextField label="CST PIS" value={draft.fiscal.pisCst} onChange={(pisCst) => updateFiscal({ pisCst })} required />
+        <TextField label="CST COFINS" value={draft.fiscal.cofinsCst} onChange={(cofinsCst) => updateFiscal({ cofinsCst })} required />
+        <TextField label="CST IPI" value={draft.fiscal.ipiCst} onChange={(ipiCst) => updateFiscal({ ipiCst })} />
+        <TextField label="Aliquota ICMS (%)" value={draft.fiscal.icmsRate} onChange={(icmsRate) => updateFiscal({ icmsRate })} required />
+        <TextField label="Aliquota PIS (%)" value={draft.fiscal.pisRate} onChange={(pisRate) => updateFiscal({ pisRate })} required />
+        <TextField label="Aliquota COFINS (%)" value={draft.fiscal.cofinsRate} onChange={(cofinsRate) => updateFiscal({ cofinsRate })} required />
+        <TextField label="Aliquota IPI (%)" value={draft.fiscal.ipiRate} onChange={(ipiRate) => updateFiscal({ ipiRate })} />
+        <label className="span-3">
+          Informacoes adicionais fiscais
+          <textarea
+            value={draft.fiscal.additionalInfo}
+            maxLength={600}
+            placeholder="Beneficio fiscal, observacao legal ou mensagem exibida na NF-e."
+            onChange={(event) => updateFiscal({ additionalInfo: event.target.value })}
+          />
+        </label>
+
+        <div className="form-section-title span-3">Unidade, medida, precificacao e estoque</div>
+        <TextField label="Unidade comercial NF-e" value={draft.commercialUnit} placeholder="UN" onChange={(commercialUnit) => onDraftChange({ ...draft, commercialUnit: commercialUnit.toUpperCase() })} required />
+        <TextField label="Unidade de estoque" value={draft.stockUnit} placeholder="UN" onChange={(stockUnit) => onDraftChange({ ...draft, stockUnit: stockUnit.toUpperCase() })} required />
+        <TextField label="Fator de conversao" value={draft.conversionFactor} placeholder="1 CX = 12 UN" onChange={(conversionFactor) => onDraftChange({ ...draft, conversionFactor })} />
+        <NumberField label="Preco de venda" value={draft.price} onChange={(price) => onDraftChange({ ...draft, price })} />
+        <NumberField label="Preco de custo" value={draft.costPrice} onChange={(costPrice) => onDraftChange({ ...draft, costPrice })} />
+        <NumberField label="Markup (%)" value={draft.markupPercent} onChange={(markupPercent) => onDraftChange({ ...draft, markupPercent })} />
+        <NumberField label="Preco minimo" value={draft.minSalePrice} onChange={(minSalePrice) => onDraftChange({ ...draft, minSalePrice })} />
+        <TextField label="Tabela de precos" value={draft.priceTable} onChange={(priceTable) => onDraftChange({ ...draft, priceTable })} />
+        <NumberField label="Estoque atual" value={draft.stockQty} onChange={(stockQty) => onDraftChange({ ...draft, stockQty })} />
+        <NumberField label="Estoque minimo" value={draft.stockMin} onChange={(stockMin) => onDraftChange({ ...draft, stockMin })} />
+        <label>
           Item de estoque
           <select value={draft.stockItem} onChange={(event) => onDraftChange({ ...draft, stockItem: event.target.value })}>
             {inventory.map((item) => (
@@ -7879,9 +8451,14 @@ function ProductForm({
             ))}
           </select>
         </label>
-        <NumberField label="Preço" value={draft.price} onChange={(price) => onDraftChange({ ...draft, price })} />
         <NumberField label="Mínimo pedido" value={draft.minOrderQty} onChange={(minOrderQty) => onDraftChange({ ...draft, minOrderQty })} />
         <NumberField label="Mínimo fração" value={draft.minFractionQty} onChange={(minFractionQty) => onDraftChange({ ...draft, minFractionQty })} />
+        <TextField label="Peso liquido (kg)" value={draft.netWeightKg} placeholder="0.500" onChange={(netWeightKg) => onDraftChange({ ...draft, netWeightKg })} />
+        <TextField label="Peso bruto (kg)" value={draft.grossWeightKg} placeholder="0.650" onChange={(grossWeightKg) => onDraftChange({ ...draft, grossWeightKg })} />
+        <TextField label="Dimensoes CxLxA (cm)" value={draft.packageDimensionsCm} placeholder="30x20x5" onChange={(packageDimensionsCm) => onDraftChange({ ...draft, packageDimensionsCm })} />
+        <TextField label="Local de armazenagem" value={draft.storageLocation} onChange={(storageLocation) => onDraftChange({ ...draft, storageLocation })} />
+
+        <div className="form-section-title span-3">Classificacao interna</div>
         <label className="span-2">
           Cores disponíveis
           <input
@@ -7897,6 +8474,38 @@ function ProductForm({
             onChange={(event) => onDraftChange({ ...draft, allowsFractions: event.target.checked })}
           />
           Permite fracionamento
+        </label>
+        <label className="check-field">
+          <input
+            checked={draft.tracksBatch}
+            type="checkbox"
+            onChange={(event) => onDraftChange({ ...draft, tracksBatch: event.target.checked })}
+          />
+          Controla lote / validade
+        </label>
+        <label className="check-field">
+          <input
+            checked={draft.isResale}
+            type="checkbox"
+            onChange={(event) => onDraftChange({ ...draft, isResale: event.target.checked })}
+          />
+          Produto para revenda
+        </label>
+        <label className="check-field">
+          <input
+            checked={draft.saleBlocked}
+            type="checkbox"
+            onChange={(event) => onDraftChange({ ...draft, saleBlocked: event.target.checked })}
+          />
+          Bloqueado para venda
+        </label>
+        <label className="span-3">
+          Observacoes internas
+          <textarea
+            value={draft.internalNotes}
+            maxLength={800}
+            onChange={(event) => onDraftChange({ ...draft, internalNotes: event.target.value })}
+          />
         </label>
       </div>
       <button className="primary-button wide" type="submit">
@@ -8133,11 +8742,12 @@ function FileForm({
             <input
               type="file"
               onChange={async (event) => {
+                const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
                 const uploaded = await onUploadFile(file, "files");
                 onDraftChange({ ...draft, name: draft.name || uploaded.name, url: uploaded.url });
-                event.currentTarget.value = "";
+                input.value = "";
               }}
             />
           </span>
@@ -8589,11 +9199,12 @@ function OrderDetail({
             <input
               type="file"
               onChange={async (event) => {
+                const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
                 const uploaded = await onUploadFile(file, "orders");
                 setArtDraft({ ...artDraft, name: artDraft.name || uploaded.name, url: uploaded.url });
-                event.currentTarget.value = "";
+                input.value = "";
               }}
             />
           </label>
