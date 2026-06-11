@@ -4,6 +4,7 @@ import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
+import { createCorsOriginMatcher } from "./config/cors.js";
 import { loadEnv } from "./config/env.js";
 import {
   acceptQuoteSchema,
@@ -112,22 +113,7 @@ await app.register(multipart, {
   },
 });
 
-const configuredOrigins = env.APP_ORIGIN.split(",")
-  .map((origin) => origin.trim().replace(/\/$/, ""))
-  .filter(Boolean);
-
-function isAllowedCorsOrigin(origin?: string): boolean {
-  if (!origin) return true;
-
-  const normalizedOrigin = origin.replace(/\/$/, "");
-  if (configuredOrigins.includes(normalizedOrigin)) return true;
-
-  if (env.NODE_ENV !== "production") {
-    return /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(normalizedOrigin);
-  }
-
-  return false;
-}
+const isAllowedCorsOrigin = createCorsOriginMatcher(env);
 
 await app.register(cors, {
   credentials: true,
@@ -139,7 +125,8 @@ await app.register(cors, {
       return;
     }
 
-    callback(new Error("Origem nao permitida pelo CORS do GraphFlow."), false);
+    app.log.warn({ origin }, "Blocked CORS origin");
+    callback(null, false);
   },
 });
 
