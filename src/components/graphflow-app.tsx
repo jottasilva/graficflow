@@ -3361,6 +3361,10 @@ export function GraphFlowApp() {
   const currentHeaderAction = authenticated ? getHeaderAction() : null;
   const HeaderActionIcon = currentHeaderAction?.icon;
   const PageHeaderIcon = view === "orders" ? ClipboardList : view === "catalog" ? Package : view === "users" ? Users : null;
+  const headerDateFilterOptions = dateFilterOptions();
+  const selectedDateFilterLabel =
+    headerDateFilterOptions.find((option) => option.value === dateFilter)?.label ??
+    headerDateFilterOptions[0].label;
   const selectedOrder = selectedOrderId
     ? orders.find((order) => order.id === selectedOrderId)
     : undefined;
@@ -3437,20 +3441,26 @@ export function GraphFlowApp() {
             <div className="header-actions">
               {dateAwareViews.has(view) ? (
                 <label className="date-button date-filter-control">
-                  <CalendarDays size={18} />
+                  <span className="date-filter-icon" aria-hidden="true">
+                    <CalendarDays size={17} />
+                  </span>
                   <span className="sr-only">Filtrar período</span>
+                  <span className="date-filter-copy">
+                    <small>Período</small>
+                    <strong>{selectedDateFilterLabel}</strong>
+                  </span>
                   <select
                     aria-label="Filtrar período"
                     value={dateFilter}
                     onChange={(event) => setDateFilter(event.target.value as DateFilter)}
                   >
-                    {dateFilterOptions().map((option) => (
+                    {headerDateFilterOptions.map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
                       </option>
                     ))}
                   </select>
-                  <ChevronDown size={16} />
+                  <ChevronDown className="date-filter-chevron" size={16} />
                 </label>
               ) : null}
               {currentHeaderAction && HeaderActionIcon ? (

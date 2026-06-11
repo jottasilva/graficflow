@@ -2002,15 +2002,19 @@ button:disabled {
 
 .date-button {
   display: inline-flex;
-  min-height: 44px;
+  height: 48px;
+  min-height: 48px;
   align-items: center;
+  flex-direction: row;
+  justify-content: flex-start;
   gap: 10px;
   border: 1px solid color-mix(in srgb, var(--primary) 16%, var(--line));
   border-radius: 8px;
   background: var(--panel);
   color: #475467;
   cursor: pointer;
-  padding: 0 14px;
+  padding: 0 14px 0 12px;
+  box-shadow: 0 10px 24px rgba(20, 28, 45, 0.04);
 }
 
 .date-filter-control,
@@ -2019,7 +2023,6 @@ button:disabled {
   cursor: default;
 }
 
-.date-filter-control select,
 .filter-select-control select {
   min-width: 0;
   border: 0;
@@ -2032,14 +2035,73 @@ button:disabled {
   padding: 0 22px 0 0;
 }
 
+.date-filter-control {
+  display: grid;
+  height: 48px;
+  min-height: 48px;
+  width: min(100%, 248px);
+  grid-template-columns: 32px minmax(0, 1fr) 16px;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 0;
+  overflow: hidden;
+}
+
+.date-filter-control select {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.date-filter-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 11%, var(--panel-2));
+  color: var(--primary);
+}
+
+.date-filter-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  line-height: 1;
+}
+
+.date-filter-copy small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.date-filter-copy strong {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 620;
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date-filter-chevron {
+  justify-self: end;
+  color: var(--muted);
+}
+
 .date-filter-control svg,
 .filter-select-control svg {
   flex: 0 0 auto;
   pointer-events: none;
-}
-
-.date-filter-control select {
-  max-width: 240px;
 }
 
 .filter-select-control {
