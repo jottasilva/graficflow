@@ -141,31 +141,40 @@ export class QuotesService {
       updatedAt: now,
     }));
 
-    const itemsResult = await this.supabase.from("quote_items").insert(items).select("*");
-    assertSupabaseOk(itemsResult.error, "criar itens do orcamento");
+    try {
+      const itemsResult = await this.supabase.from("quote_items").insert(items).select("*");
+      assertSupabaseOk(itemsResult.error, "criar itens do orcamento");
 
-    const tokenResult = await this.supabase
-      .from("quote_public_tokens")
-      .insert({
-        id: randomId("qtk"),
-        tenantId: input.tenantId,
-        quoteId,
-        tokenHash: this.hashToken(rawToken),
-        expiresAt,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .select("id,expiresAt")
-      .single();
+      const tokenResult = await this.supabase
+        .from("quote_public_tokens")
+        .insert({
+          id: randomId("qtk"),
+          tenantId: input.tenantId,
+          quoteId,
+          tokenHash: this.hashToken(rawToken),
+          expiresAt,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .select("id,expiresAt")
+        .single();
 
-    assertSupabaseOk(tokenResult.error, "criar link publico do orcamento");
+      assertSupabaseOk(tokenResult.error, "criar link publico do orcamento");
 
-    return {
-      ...quoteData,
-      quote_items: itemsResult.data ?? [],
-      publicLink: this.publicQuoteLink(quoteId, rawToken),
-      publicLinkExpiresAt: expiresAt,
-    };
+      return {
+        ...quoteData,
+        quote_items: itemsResult.data ?? [],
+        publicLink: this.publicQuoteLink(quoteId, rawToken),
+        publicLinkExpiresAt: expiresAt,
+      };
+    } catch (error) {
+      await Promise.allSettled([
+        this.supabase.from("quote_public_tokens").delete().eq("quoteId", quoteId),
+        this.supabase.from("quote_items").delete().eq("quoteId", quoteId),
+        this.supabase.from("quotes").delete().eq("id", quoteId),
+      ]);
+      throw error;
+    }
   }
 
   async update(id: string, input: UpdateQuoteInput, auth: AuthContext) {

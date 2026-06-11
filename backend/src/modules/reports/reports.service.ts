@@ -120,6 +120,8 @@ export class ReportsService {
     const lowStock = inventoryRows.filter((item) => numeric(item.availableQuantity ?? item.quantity) <= numeric(item.minQuantity)).length;
     const checkedQty = qualityRows.reduce((total, row) => total + numeric(row.checkedQty), 0);
     const rejectedQty = qualityRows.reduce((total, row) => total + numeric(row.rejectedQty), 0);
+    const billableOrders = orderRows.filter((row) => !["CANCELED", "REFUNDED"].includes(String(row.status)));
+    const confirmedRevenue = sum(billableOrders, "total");
 
     return {
       tenantId: input.tenantId,
@@ -132,8 +134,8 @@ export class ReportsService {
         orders: orderRows.length,
         openOrders: orderRows.filter((row) => !["DELIVERED", "CANCELED", "REFUNDED"].includes(String(row.status))).length,
         overdueOrders,
-        confirmedRevenue: sum(orderRows, "total", (row) => !["CANCELED", "REFUNDED"].includes(String(row.status))),
-        averageTicket: orderRows.length ? roundMoney(sum(orderRows, "total") / orderRows.length) : 0,
+        confirmedRevenue,
+        averageTicket: billableOrders.length ? roundMoney(confirmedRevenue / billableOrders.length) : 0,
       },
       quotes: {
         total: quoteRows.length,

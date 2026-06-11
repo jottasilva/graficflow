@@ -42,7 +42,7 @@ export type ClientPayload = {
 };
 
 export type DashboardOverview = {
-  source: "supabase-pg_graphql";
+  source: "supabase-pg_graphql" | "supabase-rest";
   tenantId: string;
   queriedAt: string;
   totals: {
@@ -375,7 +375,7 @@ function statusFromApi(status: CustomerDto["status"]): Client["status"] {
 function mapOrderStatus(orderStatus?: string | null, productionStatus?: string | null, itemStatus?: string | null): OrderStatus {
   if (orderStatus === "DELIVERED") return "delivered";
   if (orderStatus === "SHIPPED") return "shipping";
-  if (orderStatus === "CANCELED" || orderStatus === "REFUNDED") return "delivered";
+  if (orderStatus === "CANCELED" || orderStatus === "REFUNDED") return "canceled";
   if (itemStatus === "DONE" || productionStatus === "DONE") return "shipping";
   if (itemStatus === "PACKING" || productionStatus === "PACKING") return "conference";
   if (itemStatus === "IN_PROGRESS" || productionStatus === "IN_PROGRESS") return "production";
@@ -777,6 +777,7 @@ function productAttributes(input: Partial<Product>): Record<string, unknown> {
 }
 
 function orderStatusToApi(status: OrderStatus): string {
+  if (status === "canceled") return "CANCELED";
   if (status === "approval") return "CONFIRMED";
   if (status === "payment") return "CONFIRMED";
   if (status === "production") return "IN_PRODUCTION";
@@ -786,6 +787,7 @@ function orderStatusToApi(status: OrderStatus): string {
 }
 
 function orderItemStatusToApi(status: OrderStatus): string {
+  if (status === "canceled") return "CANCELED";
   if (status === "approval") return "PENDING";
   if (status === "payment") return "QUEUED";
   if (status === "production") return "IN_PROGRESS";
@@ -795,6 +797,7 @@ function orderItemStatusToApi(status: OrderStatus): string {
 }
 
 function productionStatusToApi(status: OrderStatus): string {
+  if (status === "canceled") return "REJECTED";
   if (status === "approval") return "WAITING";
   if (status === "payment") return "IN_QUEUE";
   if (status === "production") return "IN_PROGRESS";
@@ -851,8 +854,28 @@ function tenantParams(extra?: Record<string, string>) {
 }
 
 async function listPaginated<T>(path: string, params: URLSearchParams): Promise<T[]> {
-  const result = await request<Paginated<T>>(`${path}?${params.toString()}`);
-  return result.data;
+  const rows: T[] = [];
+  const pageSize = Number(params.get("pageSize") ?? 100) || 100;
+  let page = Number(params.get("page") ?? 1) || 1;
+
+  while (true) {
+    const pageParams = new URLSearchParams(params);
+    pageParams.set("page", String(page));
+    pageParams.set("pageSize", String(pageSize));
+
+    const result = await request<Paginated<T>>(`${path}?${pageParams.toString()}`);
+    rows.push(...result.data);
+
+    const total = result.total ?? rows.length;
+    const loaded = (result.page - 1) * result.pageSize + result.data.length;
+    if (result.data.length === 0 || loaded >= total || result.data.length < result.pageSize) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return rows;
 }
 
 export const graphflowApi = {

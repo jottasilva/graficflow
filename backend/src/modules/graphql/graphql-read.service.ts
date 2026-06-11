@@ -1,15 +1,7 @@
-import type { Env } from "../../config/env.js";
 import type { AuthContext } from "../../http/middleware/auth.js";
 import { assertTenantAccess } from "../../http/middleware/auth.js";
-import { upstreamError } from "../../shared/errors/http-error.js";
-
-type GraphqlEdge<T> = {
-  node: T;
-};
-
-type GraphqlCollection<T> = {
-  edges: Array<GraphqlEdge<T>>;
-};
+import type { SupabaseServiceClient } from "../../shared/supabase/client.js";
+import { assertSupabaseOk } from "../../shared/supabase/result.js";
 
 type DashboardOrder = {
   id: string;
@@ -47,76 +39,13 @@ type DashboardMachine = {
 };
 
 type DashboardGraphqlData = {
-  ordersCollection: GraphqlCollection<DashboardOrder>;
-  customersCollection: GraphqlCollection<DashboardCustomer>;
-  quotesCollection: GraphqlCollection<DashboardQuote>;
-  machinesCollection: GraphqlCollection<DashboardMachine>;
+  orders: DashboardOrder[];
+  customers: DashboardCustomer[];
+  quotes: DashboardQuote[];
+  machines: DashboardMachine[];
 };
 
-type GraphqlResponse<T> = {
-  data?: T;
-  errors?: Array<{ message: string; path?: Array<string | number> }>;
-};
-
-const DASHBOARD_OVERVIEW_QUERY = /* GraphQL */ `
-  query GraphFlowDashboardOverview($tenantId: String!) {
-    ordersCollection(first: 100, filter: { tenantId: { eq: $tenantId } }) {
-      edges {
-        node {
-          id
-          number
-          status
-          paymentStatus
-          productionStatus
-          total
-          createdAt
-          deletedAt
-        }
-      }
-    }
-    customersCollection(first: 100, filter: { tenantId: { eq: $tenantId } }) {
-      edges {
-        node {
-          id
-          name
-          status
-          createdAt
-          deletedAt
-        }
-      }
-    }
-    quotesCollection(first: 100, filter: { tenantId: { eq: $tenantId } }) {
-      edges {
-        node {
-          id
-          number
-          status
-          total
-          createdAt
-          deletedAt
-        }
-      }
-    }
-    machinesCollection(first: 100, filter: { tenantId: { eq: $tenantId } }) {
-      edges {
-        node {
-          id
-          name
-          status
-          createdAt
-        }
-      }
-    }
-  }
-`;
-
-function nodes<T>(collection: GraphqlCollection<T>): T[] {
-  return collection.edges.map((edge) => edge.node);
-}
-
-function activeRows<T extends { deletedAt?: string | null }>(rows: T[]): T[] {
-  return rows.filter((row) => !row.deletedAt);
-}
+const DASHBOARD_PAGE_SIZE = 1000;
 
 function numeric(value: number | string | null | undefined): number {
   return Number(value ?? 0);
@@ -127,35 +56,31 @@ function sortByCreatedAt<T extends { createdAt: string | null }>(rows: T[]): T[]
 }
 
 export class GraphqlReadService {
-  private readonly endpoint: string;
-
-  constructor(private readonly env: Env) {
-    this.endpoint = `${env.SUPABASE_URL.replace(/\/$/, "")}/graphql/v1`;
-  }
+  constructor(private readonly supabase: SupabaseServiceClient) {}
 
   async dashboardOverview(tenantId: string, auth: AuthContext) {
     assertTenantAccess(auth, tenantId);
 
-    const data = await this.query<DashboardGraphqlData>(DASHBOARD_OVERVIEW_QUERY, { tenantId });
+    const data = await this.dashboardRows(tenantId);
 
-    const orders = activeRows(nodes(data.ordersCollection));
-    const customers = activeRows(nodes(data.customersCollection));
-    const quotes = activeRows(nodes(data.quotesCollection));
-    const machines = nodes(data.machinesCollection);
+    const orders = data.orders;
+    const customers = data.customers;
+    const quotes = data.quotes;
+    const machines = data.machines;
 
     return {
-      source: "supabase-pg_graphql",
+      source: "supabase-rest",
       tenantId,
       queriedAt: new Date().toISOString(),
       totals: {
         customers: customers.length,
         activeCustomers: customers.filter((customer) => customer.status !== "INACTIVE").length,
         orders: orders.length,
-        openOrders: orders.filter((order) => order.status !== "DELIVERED" && order.status !== "CANCELED").length,
+        openOrders: orders.filter((order) => !["DELIVERED", "CANCELED", "REFUNDED"].includes(String(order.status))).length,
         productionOrders: orders.filter((order) => order.productionStatus === "IN_PROGRESS").length,
         revenue: orders.reduce((sum, order) => sum + numeric(order.total), 0),
         quotes: quotes.length,
-        acceptedQuotes: quotes.filter((quote) => quote.status === "ACCEPTED").length,
+        acceptedQuotes: quotes.filter((quote) => ["ACCEPTED", "CONVERTED"].includes(String(quote.status))).length,
         machines: machines.length,
         machinesInMaintenance: machines.filter((machine) => machine.status === "MAINTENANCE").length,
       },
@@ -167,33 +92,71 @@ export class GraphqlReadService {
     };
   }
 
-  private async query<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-    const response = await fetch(this.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: this.env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${this.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      },
-      body: JSON.stringify({ query, variables }),
-    });
+  private async dashboardRows(tenantId: string): Promise<DashboardGraphqlData> {
+    const [orders, customers, quotes, machines] = await Promise.all([
+      this.fetchAll<DashboardOrder>(
+        "orders",
+        "id,number,status,paymentStatus,productionStatus,total,createdAt,deletedAt",
+        tenantId,
+        { excludeDeleted: true, label: "pedidos do dashboard" },
+      ),
+      this.fetchAll<DashboardCustomer>(
+        "customers",
+        "id,name,status,createdAt,deletedAt",
+        tenantId,
+        { excludeDeleted: true, label: "clientes do dashboard" },
+      ),
+      this.fetchAll<DashboardQuote>(
+        "quotes",
+        "id,number,status,total,createdAt,deletedAt",
+        tenantId,
+        { excludeDeleted: true, label: "orcamentos do dashboard" },
+      ),
+      this.fetchAll<DashboardMachine>(
+        "machines",
+        "id,name,status,createdAt",
+        tenantId,
+        { label: "maquinas do dashboard" },
+      ),
+    ]);
 
-    const payload = (await response.json().catch(() => null)) as GraphqlResponse<T> | null;
+    return { orders, customers, quotes, machines };
+  }
 
-    if (!response.ok || !payload) {
-      throw upstreamError("Falha ao consultar GraphQL do Supabase.", {
-        status: response.status,
-      });
+  private async fetchAll<T>(
+    table: string,
+    columns: string,
+    tenantId: string,
+    options: { excludeDeleted?: boolean; label: string },
+  ): Promise<T[]> {
+    const rows: T[] = [];
+    let from = 0;
+
+    while (true) {
+      let query = this.supabase
+        .from(table)
+        .select(columns)
+        .eq("tenantId", tenantId)
+        .order("createdAt", { ascending: false })
+        .range(from, from + DASHBOARD_PAGE_SIZE - 1);
+
+      if (options.excludeDeleted) {
+        query = query.is("deletedAt", null);
+      }
+
+      const result = await query;
+      assertSupabaseOk(result.error, `listar ${options.label}`);
+
+      const page = (result.data ?? []) as T[];
+      rows.push(...page);
+
+      if (page.length < DASHBOARD_PAGE_SIZE) {
+        break;
+      }
+
+      from += DASHBOARD_PAGE_SIZE;
     }
 
-    if (payload.errors?.length) {
-      throw upstreamError("GraphQL retornou erro.", payload.errors);
-    }
-
-    if (!payload.data) {
-      throw upstreamError("GraphQL nao retornou dados.");
-    }
-
-    return payload.data;
+    return rows;
   }
 }

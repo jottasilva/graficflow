@@ -103,7 +103,7 @@ import {
   type UserAccount,
   type ViewKey,
 } from "@/lib/graphflow-data";
-import { graphflowApi, type DashboardOverview } from "@/lib/graphflow-api";
+import { graphflowApi, type DashboardOverview, type ManagementReport } from "@/lib/graphflow-api";
 import {
   useCallback,
   useEffect,
@@ -133,7 +133,7 @@ type ModalMode =
 
 type DateFilter = "all" | "today" | "next7" | "next30" | "overdue";
 
-const dateAwareViews = new Set<ViewKey>(["dashboard", "orders", "production"]);
+const dateAwareViews = new Set<ViewKey>(["dashboard", "orders", "production", "reports"]);
 
 function todayLongLabel() {
   return new Intl.DateTimeFormat("pt-BR", {
@@ -916,6 +916,7 @@ const nextStatus: Record<OrderStatus, OrderStatus> = {
   conference: "shipping",
   shipping: "delivered",
   delivered: "delivered",
+  canceled: "canceled",
 };
 
 const defaultProductionStages: ProductionStage[] = [
@@ -1060,6 +1061,7 @@ export function GraphFlowApp() {
   const [authChecking, setAuthChecking] = useState(() => graphflowApi.enabled());
   const [dataLoading, setDataLoading] = useState(false);
   const [dashboardOverview, setDashboardOverview] = useState<DashboardOverview | null>(null);
+  const [managementReport, setManagementReport] = useState<ManagementReport | null>(null);
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -1166,9 +1168,10 @@ export function GraphFlowApp() {
 
     try {
       setDataLoading(true);
-      const [workspace, overview] = await Promise.all([
+      const [workspace, overview, report] = await Promise.all([
         graphflowApi.loadWorkspace(),
         graphflowApi.dashboardOverview().catch(() => null),
+        graphflowApi.managementReport().catch(() => null),
       ]);
 
       setClients(workspace.clients);
@@ -1186,6 +1189,7 @@ export function GraphFlowApp() {
       setOrderDraft(defaultOrderDraft(workspace.products, workspace.clients));
       setQuoteDraft(loadSavedQuoteDraft(workspace.clients) ?? defaultQuoteDraft(workspace.clients));
       setDashboardOverview(overview);
+      setManagementReport(report);
     } catch (error) {
       createNotification({
         tone: "danger",
@@ -1293,6 +1297,19 @@ export function GraphFlowApp() {
       .catch(() => {
         if (active) {
           setDashboardOverview(null);
+        }
+      });
+
+    graphflowApi
+      .managementReport()
+      .then((report) => {
+        if (active) {
+          setManagementReport(report);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setManagementReport(null);
         }
       });
 
@@ -3569,8 +3586,8 @@ export function GraphFlowApp() {
 
           {view === "dashboard" ? (
             <DashboardView
-              overview={dashboardOverview}
-              orders={orders}
+              overview={dateFilter === "all" ? dashboardOverview : null}
+              orders={filteredOrders}
               finance={finance}
               inventory={inventory}
               notifications={notifications}
@@ -3760,7 +3777,12 @@ export function GraphFlowApp() {
           ) : null}
 
           {view === "reports" ? (
-            <ReportsView orders={orders} finance={finance} sectors={sectors} />
+            <ReportsView
+              orders={filteredOrders}
+              finance={finance}
+              sectors={sectors}
+              report={dateFilter === "all" ? managementReport : null}
+            />
           ) : null}
 
           {view === "files" ? (
@@ -4283,8 +4305,25 @@ function orderStatusCounts(orders: Order[]) {
   }));
 }
 
+function isDeliveredOrderStatus(status: OrderStatus) {
+  return status === "delivered";
+}
+
+function isCanceledOrderStatus(status: OrderStatus) {
+  return status === "canceled";
+}
+
+function isClosedOrderStatus(status: OrderStatus) {
+  return isDeliveredOrderStatus(status) || isCanceledOrderStatus(status);
+}
+
 function sumFinance(finance: FinanceEntry[], type: FinanceEntry["type"]) {
   return finance.filter((entry) => entry.type === type).reduce((sum, entry) => sum + entry.value, 0);
+}
+
+function reportValue(section: Record<string, number> | undefined, key: string, fallback: number) {
+  const value = section?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function DashboardView({
@@ -4312,10 +4351,10 @@ function DashboardView({
 }) {
   const receivable = sumFinance(finance, "receivable");
   const orderRevenue = orders.reduce((sum, order) => sum + order.total, 0);
-  const revenue = (overview?.totals.revenue ?? receivable) || orderRevenue;
+  const revenue = overview?.totals.revenue ?? (orderRevenue || receivable);
   const lowStock = inventory.filter((item) => item.quantity < item.minQuantity).length;
-  const activeOrders = orders.filter((order) => order.status !== "delivered");
-  const deliveredOrders = orders.filter((order) => order.status === "delivered").length;
+  const activeOrders = orders.filter((order) => !isClosedOrderStatus(order.status));
+  const deliveredOrders = orders.filter((order) => isDeliveredOrderStatus(order.status)).length;
   const unreadNotifications = notifications.filter((item) => !item.read).length;
   const totals = overview?.totals;
   const statusCounts = orderStatusCounts(orders);
@@ -4533,7 +4572,7 @@ function orderMatchesDateFilter(order: Order, filter: DateFilter) {
   if (filter === "today") return diffDays === 0;
   if (filter === "next7") return diffDays >= 0 && diffDays <= 7;
   if (filter === "next30") return diffDays >= 0 && diffDays <= 30;
-  return diffDays < 0 && order.status !== "delivered";
+  return diffDays < 0 && !isClosedOrderStatus(order.status);
 }
 
 function daysUntilOrder(order: Order) {
@@ -4543,7 +4582,8 @@ function daysUntilOrder(order: Order) {
 }
 
 function orderDeliveryDetail(order: Order) {
-  if (order.status === "delivered") return "entregue";
+  if (isDeliveredOrderStatus(order.status)) return "entregue";
+  if (isCanceledOrderStatus(order.status)) return "cancelado";
   const days = daysUntilOrder(order);
   if (days === null) return "prazo a confirmar";
   if (days < 0) return `${Math.abs(days)} dias atrasado`;
@@ -4604,7 +4644,7 @@ function OrdersView({
   const priorityOptions = Array.from(new Set(orders.map((order) => order.priority)));
   const totalValue = visibleOrders.reduce((sum, order) => sum + order.total, 0);
   const productionCount = visibleOrders.filter((order) => order.status === "production").length;
-  const deliveredCount = visibleOrders.filter((order) => order.status === "delivered").length;
+  const deliveredCount = visibleOrders.filter((order) => isDeliveredOrderStatus(order.status)).length;
   const deliveryDays = visibleOrders
     .map(daysUntilOrder)
     .filter((days): days is number => typeof days === "number" && days >= 0);
@@ -5358,7 +5398,7 @@ function SupportView({
     supportConversations.find((conversation) => conversation.id === selectedConversationId) ??
     supportConversations[0];
   const activeOrder =
-    activeConversation?.order ?? orders.find((order) => order.status !== "delivered") ?? orders[0];
+    activeConversation?.order ?? orders.find((order) => !isClosedOrderStatus(order.status)) ?? orders[0];
   const client =
     activeConversation?.client ??
     clients.find((item) => item.name === activeOrder?.customer || item.company === activeOrder?.customer) ??
@@ -7050,8 +7090,8 @@ function estimatedOrderHours(order: Order) {
 
 function machineHourMetrics(machine: Machine, orders: Order[]) {
   const relatedOrders = orders.filter((order) => order.sector === machine.sector);
-  const openOrders = relatedOrders.filter((order) => order.status !== "delivered");
-  const closedOrders = relatedOrders.filter((order) => order.status === "delivered");
+  const openOrders = relatedOrders.filter((order) => !isClosedOrderStatus(order.status));
+  const closedOrders = relatedOrders.filter((order) => isDeliveredOrderStatus(order.status));
   const openHours = openOrders.reduce(
     (sum, order) => sum + Math.max(1, Math.round(estimatedOrderHours(order) * (order.progress / 100))),
     0,
@@ -7079,8 +7119,8 @@ function sectorLiveMetrics(sector: Sector, orders: Order[], machines: Machine[],
   const sectorOrders = orders.filter(
     (order) => order.stageId === sector.id || sameProductionSector(order.sector, sector.name),
   );
-  const activeOrders = sectorOrders.filter((order) => order.status !== "delivered");
-  const deliveredOrders = sectorOrders.length - activeOrders.length;
+  const activeOrders = sectorOrders.filter((order) => !isClosedOrderStatus(order.status));
+  const deliveredOrders = sectorOrders.filter((order) => isDeliveredOrderStatus(order.status)).length;
   const sectorMachines = machines.filter((machine) => sameProductionSector(machine.sector, sector.name));
   const linkedProducts = products.filter((product) => sameProductionSector(product.sector, sector.name));
   const machineCapacity = sectorMachines.length
@@ -8434,11 +8474,7 @@ function FinanceView({
           Os valores são projeções e podem sofrer alterações.
         </p>
       </section>
-    </section>
-  );
 
-  return (
-    <section className="finance-page">
       <section className="finance-summary">
         <MetricMini label="Receber" value={formatCurrency(receivable)} tone="#16b981" />
         <MetricMini label="Pagar" value={formatCurrency(payable)} tone="#ee3045" />
@@ -8737,26 +8773,29 @@ function ReportsView({
   orders,
   finance,
   sectors,
+  report,
 }: {
   orders: Order[];
   finance: FinanceEntry[];
   sectors: Sector[];
+  report: ManagementReport | null;
 }) {
-  const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0);
-  const averageTicket = totalRevenue / Math.max(orders.length, 1);
-  const deliveredOrders = orders.filter((order) => order.status === "delivered").length;
-  const openOrders = orders.length - deliveredOrders;
+  const localRevenue = orders.filter((order) => !isCanceledOrderStatus(order.status)).reduce((sum, order) => sum + order.total, 0);
+  const totalRevenue = reportValue(report?.sales, "confirmedRevenue", localRevenue);
+  const averageTicket = reportValue(report?.sales, "averageTicket", totalRevenue / Math.max(orders.filter((order) => !isCanceledOrderStatus(order.status)).length, 1));
+  const deliveredOrders = orders.filter((order) => isDeliveredOrderStatus(order.status)).length;
+  const openOrders = reportValue(report?.sales, "openOrders", orders.filter((order) => !isClosedOrderStatus(order.status)).length);
   const averageProgress = Math.round(
     orders.reduce((sum, order) => sum + order.progress, 0) / Math.max(orders.length, 1),
   );
   const averageCapacity = Math.round(
     sectors.reduce((sum, sector) => sum + sector.capacity, 0) / Math.max(sectors.length, 1),
   );
-  const receivable = finance.find((entry) => entry.type === "receivable")?.value ?? 0;
-  const payable = finance.find((entry) => entry.type === "payable")?.value ?? 0;
+  const receivable = reportValue(report?.finance, "receivable", sumFinance(finance, "receivable"));
+  const payable = reportValue(report?.finance, "payable", sumFinance(finance, "payable"));
   const profit = finance.find((entry) => entry.type === "profit")?.value ?? 0;
   const margin = finance.find((entry) => entry.type === "margin")?.value ?? 0;
-  const cash = finance.find((entry) => entry.type === "cash")?.value ?? 0;
+  const cash = reportValue(report?.finance, "projectedCash", sumFinance(finance, "cash"));
   const busiestSector = [...sectors].sort((a, b) => b.capacity - a.capacity)[0];
   const statusRows = (Object.keys(statusMeta) as OrderStatus[]).map((status) => ({
     label: statusMeta[status].label,

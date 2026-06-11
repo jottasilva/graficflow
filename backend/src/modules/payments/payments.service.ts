@@ -108,7 +108,7 @@ export class PaymentsService {
     assertSupabaseOk(result.error, "criar pagamento");
 
     const payment = result.data as PaymentRow;
-    if (payment.status === "PAID") await this.syncPaidReference(payment);
+    await this.syncPaidReference(payment);
 
     await this.audit.record({
       tenantId: input.tenantId,
@@ -136,9 +136,7 @@ export class PaymentsService {
     assertSupabaseOk(result.error, "atualizar pagamento");
     const payment = result.data as PaymentRow;
 
-    if (payment.status === "PAID" && current.status !== "PAID") {
-      await this.syncPaidReference(payment);
-    }
+    await this.syncPaidReference(payment);
 
     await this.audit.record({
       tenantId: current.tenantId,
@@ -161,15 +159,20 @@ export class PaymentsService {
 
   private async syncPaidReference(payment: PaymentRow) {
     if (payment.direction === "incoming" && payment.orderId) {
-      await this.applyPaidAmount("orders", payment.orderId, payment.amount);
+      await this.recalculatePaidAmount("orders", payment.orderId, "orderId", "incoming");
     }
 
     if (payment.direction === "outgoing" && payment.purchaseOrderId) {
-      await this.applyPaidAmount("purchase_orders", payment.purchaseOrderId, payment.amount);
+      await this.recalculatePaidAmount("purchase_orders", payment.purchaseOrderId, "purchaseOrderId", "outgoing");
     }
   }
 
-  private async applyPaidAmount(table: "orders" | "purchase_orders", id: string, amount: number | string) {
+  private async recalculatePaidAmount(
+    table: "orders" | "purchase_orders",
+    id: string,
+    paymentReferenceColumn: "orderId" | "purchaseOrderId",
+    direction: "incoming" | "outgoing",
+  ) {
     const current = await this.supabase
       .from(table)
       .select("id,tenantId,total,paidAmount")
@@ -179,8 +182,18 @@ export class PaymentsService {
     assertSupabaseOk(current.error, "buscar referencia do pagamento");
     if (!current.data) throw notFound("Referencia do pagamento nao encontrada.");
 
+    const payments = await this.supabase
+      .from("payment_transactions")
+      .select("amount")
+      .eq("tenantId", current.data.tenantId)
+      .eq(paymentReferenceColumn, id)
+      .eq("direction", direction)
+      .eq("status", "PAID");
+
+    assertSupabaseOk(payments.error, "somar pagamentos da referencia");
+
     const total = Number(current.data.total ?? 0);
-    const paidAmount = roundMoney(Number(current.data.paidAmount ?? 0) + Number(amount));
+    const paidAmount = roundMoney((payments.data ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0));
     const remainingAmount = Math.max(0, roundMoney(total - paidAmount));
     const paymentStatus = remainingAmount === 0 ? "PAID" : paidAmount > 0 ? "PARTIAL" : "PENDING";
 

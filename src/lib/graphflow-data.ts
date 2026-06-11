@@ -25,7 +25,8 @@ export type OrderStatus =
   | "production"
   | "conference"
   | "shipping"
-  | "delivered";
+  | "delivered"
+  | "canceled";
 
 export type Priority = "Baixa" | "Média" | "Alta" | "Crítica";
 
@@ -352,6 +353,11 @@ export const statusMeta: Record<
     label: "Entregues",
     color: "#10a37f",
     bg: "rgba(16, 163, 127, 0.12)",
+  },
+  canceled: {
+    label: "Cancelados",
+    color: "#647087",
+    bg: "rgba(100, 112, 135, 0.14)",
   },
 };
 

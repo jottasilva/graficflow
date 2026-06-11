@@ -187,30 +187,60 @@ export class OrdersService {
       updatedAt: now,
     }));
 
-    const itemResult = await this.supabase.from("order_items").insert(items).select("*");
-    assertSupabaseOk(itemResult.error, "criar itens do pedido");
+    try {
+      const itemResult = await this.supabase.from("order_items").insert(items).select("*");
+      assertSupabaseOk(itemResult.error, "criar itens do pedido");
 
-    const tokenResult = await this.supabase
-      .from("order_public_tokens")
-      .insert({
-        id: randomId("otk"),
-        tenantId: input.tenantId,
-        orderId,
-        tokenHash: this.hashToken(rawToken),
-        expiresAt,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .select("id,expiresAt")
-      .single();
-    assertSupabaseOk(tokenResult.error, "criar link publico do pedido");
+      const tokenResult = await this.supabase
+        .from("order_public_tokens")
+        .insert({
+          id: randomId("otk"),
+          tenantId: input.tenantId,
+          orderId,
+          tokenHash: this.hashToken(rawToken),
+          expiresAt,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .select("id,expiresAt")
+        .single();
+      assertSupabaseOk(tokenResult.error, "criar link publico do pedido");
 
-    return {
-      ...orderData,
-      order_items: itemResult.data ?? [],
-      publicLink: this.publicOrderLink(orderId, rawToken),
-      publicLinkExpiresAt: expiresAt,
-    };
+      const financeResult = await this.supabase
+        .from("financial_transactions")
+        .insert({
+          id: randomId("fin"),
+          tenantId: input.tenantId,
+          orderId,
+          quoteId: input.quoteId ?? null,
+          label: `Receber pedido ${String(orderData.number ?? orderId)}`,
+          type: "receivable",
+          value: total,
+          due: input.expectedDeliveryAt?.slice(0, 10) ?? null,
+          status: "Pendente",
+          metadata: { source: "order.create", orderNumber: orderData.number ?? null },
+          createdAt: now,
+          updatedAt: now,
+        })
+        .select("id")
+        .single();
+      assertSupabaseOk(financeResult.error, "criar recebivel do pedido");
+
+      return {
+        ...orderData,
+        order_items: itemResult.data ?? [],
+        publicLink: this.publicOrderLink(orderId, rawToken),
+        publicLinkExpiresAt: expiresAt,
+      };
+    } catch (error) {
+      await Promise.allSettled([
+        this.supabase.from("financial_transactions").delete().eq("orderId", orderId),
+        this.supabase.from("order_public_tokens").delete().eq("orderId", orderId),
+        this.supabase.from("order_items").delete().eq("orderId", orderId),
+        this.supabase.from("orders").delete().eq("id", orderId),
+      ]);
+      throw error;
+    }
   }
 
   async update(id: string, input: UpdateOrderInput, auth: AuthContext) {
