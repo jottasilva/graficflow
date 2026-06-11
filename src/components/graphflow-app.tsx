@@ -209,6 +209,21 @@ type UserDraft = {
   password: string;
 };
 
+type AuthSessionUser = {
+  id: string;
+  tenantId?: string;
+  email?: string;
+  role?: string;
+};
+
+type SidebarUserProfile = {
+  name: string;
+  subtitle: string;
+  initials: string;
+  avatarUrl?: string;
+  email?: string;
+};
+
 type ProductDraft = {
   sku: string;
   name: string;
@@ -387,6 +402,46 @@ function parseAvailableColors(value: string) {
     .filter(Boolean);
 
   return colors.length ? Array.from(new Set(colors)) : DEFAULT_PRODUCT_COLORS;
+}
+
+function roleLabel(role?: string) {
+  if (role === "ADMIN") return "Administrador";
+  if (role === "MANAGER") return "Gerente";
+  if (role === "FINANCE") return "Financeiro";
+  if (role === "CLIENT") return "Cliente";
+  if (role === "VIEWER") return "Leitura";
+  return "Operador";
+}
+
+function accountInitials(nameOrEmail: string) {
+  const clean = nameOrEmail.trim();
+  if (!clean) return "GF";
+  const namePart = clean.includes("@") ? clean.split("@")[0] : clean;
+  const words = namePart
+    .replace(/[._-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!words.length) return "GF";
+  return words
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+}
+
+function sidebarUserProfile(user: UserAccount | null | undefined, sessionUser: AuthSessionUser | null): SidebarUserProfile {
+  const email = user?.email || sessionUser?.email || "";
+  const name = user?.name || email || "Usuário";
+  const subtitle = user?.jobTitle || roleLabel(user?.role ?? sessionUser?.role);
+
+  return {
+    name,
+    subtitle,
+    initials: accountInitials(name || email),
+    avatarUrl: user?.avatarUrl || undefined,
+    email: email || undefined,
+  };
 }
 
 const nfeUnits = new Set(["UN", "PC", "KG", "G", "CX", "PCT", "L", "ML", "M", "M2", "M3", "T"]);
@@ -1001,6 +1056,7 @@ export function GraphFlowApp() {
   const [dark, setDark] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
+  const [authSessionUser, setAuthSessionUser] = useState<AuthSessionUser | null>(null);
   const [authChecking, setAuthChecking] = useState(() => graphflowApi.enabled());
   const [dataLoading, setDataLoading] = useState(false);
   const [dashboardOverview, setDashboardOverview] = useState<DashboardOverview | null>(null);
@@ -1198,6 +1254,12 @@ export function GraphFlowApp() {
       .then(async (session) => {
         if (active) {
           setAuthUserId(session.user.id);
+          setAuthSessionUser({
+            id: session.user.id,
+            tenantId: session.user.tenantId,
+            email: session.user.email,
+            role: session.user.role,
+          });
           setAuthenticated(true);
           await refreshWorkspace();
         }
@@ -1205,6 +1267,7 @@ export function GraphFlowApp() {
       .catch(() => {
         if (active) {
           setAuthenticated(false);
+          setAuthSessionUser(null);
         }
         /*
         createNotification({
@@ -3368,6 +3431,21 @@ export function GraphFlowApp() {
   const selectedOrder = selectedOrderId
     ? orders.find((order) => order.id === selectedOrderId)
     : undefined;
+  const loggedUser = useMemo(
+    () =>
+      users.find(
+        (user) =>
+          user.id === authUserId ||
+          user.email === authUserId ||
+          user.id === authSessionUser?.id ||
+          user.email === authSessionUser?.email,
+      ),
+    [authSessionUser?.email, authSessionUser?.id, authUserId, users],
+  );
+  const sidebarUser = useMemo(
+    () => sidebarUserProfile(loggedUser, authSessionUser),
+    [authSessionUser, loggedUser],
+  );
 
   if (authChecking) {
     return <AuthLoadingScreen />;
@@ -3381,6 +3459,16 @@ export function GraphFlowApp() {
             ? await graphflowApi.session().catch(() => null)
             : null;
           setAuthUserId(session?.user.id ?? null);
+          setAuthSessionUser(
+            session
+              ? {
+                  id: session.user.id,
+                  tenantId: session.user.tenantId,
+                  email: session.user.email,
+                  role: session.user.role,
+                }
+              : null,
+          );
           setAuthenticated(true);
           await refreshWorkspace();
           setView("dashboard");
@@ -3400,6 +3488,7 @@ export function GraphFlowApp() {
         open={sidebarOpen}
         collapsed={sidebarCollapsed}
         unreadCount={unreadCount}
+        user={sidebarUser}
         onClose={() => setSidebarOpen(false)}
         onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
       />
@@ -3419,6 +3508,7 @@ export function GraphFlowApp() {
           onLogout={() => {
             graphflowApi.logout().catch(() => undefined);
             setAuthUserId(null);
+            setAuthSessionUser(null);
             setAuthenticated(false);
           }}
         />
@@ -3895,6 +3985,7 @@ function Sidebar({
   open,
   collapsed,
   unreadCount,
+  user,
   onViewChange,
   onClose,
   onToggleCollapsed,
@@ -3903,6 +3994,7 @@ function Sidebar({
   open: boolean;
   collapsed: boolean;
   unreadCount: number;
+  user: SidebarUserProfile;
   onViewChange: (view: ViewKey) => void;
   onClose: () => void;
   onToggleCollapsed: () => void;
@@ -4007,14 +4099,26 @@ function Sidebar({
           })}
         </nav>
 
-        <div className="user-card">
+        <div className="user-card" title={user.email ? `${user.name} - ${user.email}` : user.name}>
           <div className="avatar">
-            <span>JS</span>
+            {user.avatarUrl ? (
+              <Image
+                src={user.avatarUrl}
+                alt=""
+                fill
+                sizes="46px"
+                unoptimized
+                onError={(event) => {
+                  event.currentTarget.style.display = "none";
+                }}
+              />
+            ) : null}
+            <span>{user.initials}</span>
             <i />
           </div>
           <div>
-            <strong>João Silva</strong>
-            <span>Administrador</span>
+            <strong>{user.name}</strong>
+            <span>{user.subtitle}</span>
           </div>
           <ChevronDown size={16} />
         </div>

@@ -221,7 +221,7 @@ export function createAuthProvider(env: Env, supabase: SupabaseServiceClient): A
           token: "dev-bypass",
           userId: env.DEV_USER_ID,
           tenantId: env.DEV_TENANT_ID,
-          email: "dev@graphflow.local",
+          email: env.DEV_ADMIN_EMAIL,
           role: "ADMIN",
           permissions: ["*"],
           sectorIds: [],
