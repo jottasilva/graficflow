@@ -131,6 +131,28 @@ type ModalMode =
   | "file"
   | null;
 
+type DateFilter = "all" | "today" | "next7" | "next30" | "overdue";
+
+const dateAwareViews = new Set<ViewKey>(["dashboard", "orders", "production"]);
+
+function todayLongLabel() {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).format(new Date());
+}
+
+function dateFilterOptions() {
+  return [
+    { value: "all", label: "Todos os períodos" },
+    { value: "today", label: `Hoje, ${todayLongLabel()}` },
+    { value: "next7", label: "Próximos 7 dias" },
+    { value: "next30", label: "Próximos 30 dias" },
+    { value: "overdue", label: "Atrasados" },
+  ] satisfies Array<{ value: DateFilter; label: string }>;
+}
+
 type NewOrderDraft = {
   orderNumber: string;
   orderDate: string;
@@ -346,6 +368,12 @@ function dateInputAfterDays(days: number) {
 
 function todayInputDate() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function todayAtNoon() {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  return date;
 }
 
 function firstProductColor(product?: Product) {
@@ -987,6 +1015,7 @@ export function GraphFlowApp() {
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
   });
   const [query, setQuery] = useState("");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [dark, setDark] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -1366,8 +1395,8 @@ export function GraphFlowApp() {
   ]);
 
   const filteredOrders = useMemo(
-    () => orders.filter((order) => orderMatchesQuery(order, query)),
-    [orders, query],
+    () => orders.filter((order) => orderMatchesQuery(order, query) && orderMatchesDateFilter(order, dateFilter)),
+    [orders, query, dateFilter],
   );
 
   const filteredProducts = useMemo(
@@ -3418,17 +3447,23 @@ export function GraphFlowApp() {
               </div>
             </div>
             <div className="header-actions">
-              {view !== "users" ? (
-                <button
-                  className="date-button"
-                  type="button"
-                  aria-label="Selecionar data"
-                  title="Selecionar data"
-                >
+              {dateAwareViews.has(view) ? (
+                <label className="date-button date-filter-control">
                   <CalendarDays size={18} />
-                  <span>Hoje, 24 de Maio de 2025</span>
+                  <span className="sr-only">Filtrar período</span>
+                  <select
+                    aria-label="Filtrar período"
+                    value={dateFilter}
+                    onChange={(event) => setDateFilter(event.target.value as DateFilter)}
+                  >
+                    {dateFilterOptions().map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                   <ChevronDown size={16} />
-                </button>
+                </label>
               ) : null}
               {currentHeaderAction && HeaderActionIcon ? (
                 <button
@@ -4383,12 +4418,24 @@ function orderDueDate(order: Order): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function orderMatchesDateFilter(order: Order, filter: DateFilter) {
+  if (filter === "all") return true;
+
+  const dueDate = orderDueDate(order);
+  if (!dueDate) return false;
+
+  const diffDays = Math.ceil((dueDate.getTime() - todayAtNoon().getTime()) / 86_400_000);
+
+  if (filter === "today") return diffDays === 0;
+  if (filter === "next7") return diffDays >= 0 && diffDays <= 7;
+  if (filter === "next30") return diffDays >= 0 && diffDays <= 30;
+  return diffDays < 0 && order.status !== "delivered";
+}
+
 function daysUntilOrder(order: Order) {
   const dueDate = orderDueDate(order);
   if (!dueDate) return null;
-  const today = new Date();
-  today.setHours(12, 0, 0, 0);
-  return Math.ceil((dueDate.getTime() - today.getTime()) / 86_400_000);
+  return Math.ceil((dueDate.getTime() - todayAtNoon().getTime()) / 86_400_000);
 }
 
 function orderDeliveryDetail(order: Order) {
@@ -4443,10 +4490,18 @@ function OrdersView({
   onOpenOrder: (orderId: string) => void;
   onUpdateStatus: (orderId: string) => void;
 }) {
-  const totalValue = orders.reduce((sum, order) => sum + order.total, 0);
-  const productionCount = orders.filter((order) => order.status === "production").length;
-  const deliveredCount = orders.filter((order) => order.status === "delivered").length;
-  const deliveryDays = orders
+  const [statusFilter, setStatusFilter] = useState<"all" | OrderStatus>("all");
+  const [priorityFilter, setPriorityFilter] = useState<"all" | Order["priority"]>("all");
+  const visibleOrders = orders.filter((order) => {
+    if (statusFilter !== "all" && order.status !== statusFilter) return false;
+    if (priorityFilter !== "all" && order.priority !== priorityFilter) return false;
+    return true;
+  });
+  const priorityOptions = Array.from(new Set(orders.map((order) => order.priority)));
+  const totalValue = visibleOrders.reduce((sum, order) => sum + order.total, 0);
+  const productionCount = visibleOrders.filter((order) => order.status === "production").length;
+  const deliveredCount = visibleOrders.filter((order) => order.status === "delivered").length;
+  const deliveryDays = visibleOrders
     .map(daysUntilOrder)
     .filter((days): days is number => typeof days === "number" && days >= 0);
   const averageDelivery = deliveryDays.length
@@ -4459,29 +4514,29 @@ function OrdersView({
         <OrderMetricCard
           icon={ClipboardList}
           title="Total de pedidos"
-          value={formatNumber(orders.length)}
-          detail={`${percentText(orders.length, orders.length)} deste período`}
+          value={formatNumber(visibleOrders.length)}
+          detail={`${percentText(visibleOrders.length, orders.length)} deste período`}
           tone="#6b45ff"
         />
         <OrderMetricCard
           icon={ChartNoAxesColumn}
           title="Valor total"
           value={formatCurrency(totalValue)}
-          detail={`${percentText(orders.length, orders.length)} deste período`}
+          detail={`${percentText(visibleOrders.length, orders.length)} deste período`}
           tone="#18a957"
         />
         <OrderMetricCard
           icon={Truck}
           title="Em produção"
           value={formatNumber(productionCount)}
-          detail={`${percentText(productionCount, orders.length)} do total`}
+          detail={`${percentText(productionCount, visibleOrders.length)} do total`}
           tone="#236dff"
         />
         <OrderMetricCard
           icon={Package}
           title="Entregues"
           value={formatNumber(deliveredCount)}
-          detail={`${percentText(deliveredCount, orders.length)} do total`}
+          detail={`${percentText(deliveredCount, visibleOrders.length)} do total`}
           tone="#ff7208"
         />
         <OrderMetricCard
@@ -4496,14 +4551,44 @@ function OrdersView({
       <section className="table-card orders-table-card">
         <div className="orders-table-toolbar">
           <div>
-            <strong>{orders.length} pedidos</strong>
+            <strong>{visibleOrders.length} pedidos</strong>
             <span>Pipeline comercial e operacional</span>
           </div>
           <div className="orders-toolbar-actions">
-            <button className="ghost-button" type="button">
+            <label className="filter-select-control">
               <Funnel size={17} />
-              Filtros
-            </button>
+              <span className="sr-only">Filtrar status</span>
+              <select
+                aria-label="Filtrar status"
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as "all" | OrderStatus)}
+              >
+                <option value="all">Todos os status</option>
+                {(Object.keys(statusMeta) as OrderStatus[]).map((status) => (
+                  <option key={status} value={status}>
+                    {statusMeta[status].label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </label>
+            <label className="filter-select-control">
+              <Tag size={17} />
+              <span className="sr-only">Filtrar prioridade</span>
+              <select
+                aria-label="Filtrar prioridade"
+                value={priorityFilter}
+                onChange={(event) => setPriorityFilter(event.target.value as "all" | Order["priority"])}
+              >
+                <option value="all">Todas as prioridades</option>
+                {priorityOptions.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {priority}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </label>
             <button className="primary-button" type="button" onClick={onCreateOrder}>
               <Plus size={18} />
               Novo Pedido
@@ -4525,7 +4610,7 @@ function OrdersView({
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => (
+              {visibleOrders.map((order) => (
                 <tr
                   className="clickable-row order-table-row"
                   key={order.id}
@@ -4546,7 +4631,7 @@ function OrdersView({
                       </span>
                       <div>
                         <strong>{order.number ?? order.id}</strong>
-                        <small>24/05/2025 · 10:{String(Math.max(10, 35 - orders.indexOf(order) * 2)).padStart(2, "0")}</small>
+                        <small>{order.delivery} · 10:{String(Math.max(10, 35 - visibleOrders.indexOf(order) * 2)).padStart(2, "0")}</small>
                       </div>
                     </div>
                   </td>
@@ -4851,9 +4936,14 @@ function ClientsView({
   onCreateClient: () => void;
 }) {
   const [clientSearch, setClientSearch] = useState("");
+  const [clientStatusFilter, setClientStatusFilter] = useState<"all" | Client["status"]>("all");
+  const [clientTypeFilter, setClientTypeFilter] = useState<"all" | NonNullable<Client["personType"]>>("all");
   const [page, setPage] = useState(1);
   const pageSize = 8;
   const filteredClients = clients.filter((client) => {
+    if (clientStatusFilter !== "all" && client.status !== clientStatusFilter) return false;
+    if (clientTypeFilter !== "all" && client.personType !== clientTypeFilter) return false;
+
     const query = normalizeText(clientSearch);
     if (!query) return true;
     return normalizeText([
@@ -4900,11 +4990,41 @@ function ClientsView({
         </label>
 
         <div className="clients-toolbar-actions">
-          <button className="ghost-button" type="button">
+          <label className="filter-select-control">
             <Funnel size={17} />
-            Filtros
+            <span className="sr-only">Filtrar status do cliente</span>
+            <select
+              aria-label="Filtrar status do cliente"
+              value={clientStatusFilter}
+              onChange={(event) => {
+                setClientStatusFilter(event.target.value as "all" | Client["status"]);
+                setPage(1);
+              }}
+            >
+              <option value="all">Todos os status</option>
+              <option value="Ativo">Ativos</option>
+              <option value="Atenção">Atenção</option>
+              <option value="Inativo">Inativos</option>
+            </select>
             <ChevronDown size={15} />
-          </button>
+          </label>
+          <label className="filter-select-control">
+            <Building2 size={17} />
+            <span className="sr-only">Filtrar tipo do cliente</span>
+            <select
+              aria-label="Filtrar tipo do cliente"
+              value={clientTypeFilter}
+              onChange={(event) => {
+                setClientTypeFilter(event.target.value as "all" | NonNullable<Client["personType"]>);
+                setPage(1);
+              }}
+            >
+              <option value="all">PF e PJ</option>
+              <option value="PF">Pessoa física</option>
+              <option value="PJ">Pessoa jurídica</option>
+            </select>
+            <ChevronDown size={15} />
+          </label>
         </div>
       </div>
 
@@ -5472,10 +5592,15 @@ function UsersView({
   const [passwordDraft, setPasswordDraft] = useState("");
   const [userDrafts, setUserDrafts] = useState<Record<string, Partial<UserAccount>>>({});
   const [contactSearch, setContactSearch] = useState("");
+  const [userStatusFilter, setUserStatusFilter] = useState<"all" | UserAccount["status"]>("all");
+  const [userTypeFilter, setUserTypeFilter] = useState<"all" | UserAccount["type"]>("all");
   const [page, setPage] = useState(1);
   const pageSize = 4;
   const selectedUser = selectedUserId ? users.find((user) => user.id === selectedUserId) : undefined;
   const filteredUsers = users.filter((user) => {
+    if (userStatusFilter !== "all" && user.status !== userStatusFilter) return false;
+    if (userTypeFilter !== "all" && user.type !== userTypeFilter) return false;
+
     const query = normalizeText(contactSearch);
     if (!query) return true;
     const sectorNames = sectors
@@ -5611,10 +5736,43 @@ function UsersView({
             }}
           />
         </label>
-        <button className="ghost-button contacts-filter-button" type="button">
+        <label className="filter-select-control contacts-filter-button">
           <Funnel size={20} />
-          Filtros
-        </button>
+          <span className="sr-only">Filtrar status do contato</span>
+          <select
+            aria-label="Filtrar status do contato"
+            value={userStatusFilter}
+            onChange={(event) => {
+              setUserStatusFilter(event.target.value as "all" | UserAccount["status"]);
+              setPage(1);
+            }}
+          >
+            <option value="all">Todos os status</option>
+            <option value="Ativo">Ativos</option>
+            <option value="Convidado">Convidados</option>
+            <option value="Suspenso">Suspensos</option>
+            <option value="Inativo">Inativos</option>
+          </select>
+          <ChevronDown size={15} />
+        </label>
+        <label className="filter-select-control contacts-filter-button">
+          <UserCog size={20} />
+          <span className="sr-only">Filtrar tipo do contato</span>
+          <select
+            aria-label="Filtrar tipo do contato"
+            value={userTypeFilter}
+            onChange={(event) => {
+              setUserTypeFilter(event.target.value as "all" | UserAccount["type"]);
+              setPage(1);
+            }}
+          >
+            <option value="all">Todos os tipos</option>
+            <option value="ADMIN">Administradores</option>
+            <option value="OPERATOR">Operadores</option>
+            <option value="CLIENT">Clientes</option>
+          </select>
+          <ChevronDown size={15} />
+        </label>
       </div>
 
       <div className="contacts-list">
@@ -6115,7 +6273,19 @@ function ProductsView({
   onDeleteProduct: (productId: string) => void | Promise<void>;
 }) {
   const [productSearch, setProductSearch] = useState("");
-  const filteredProducts = products.filter((product) => productMatchesQuery(product, productSearch));
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [availabilityFilter, setAvailabilityFilter] = useState<"all" | "available" | "unavailable">("all");
+  const productCategories = Array.from(new Set(products.map((product) => product.category).filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b, "pt-BR"),
+  );
+  const filteredProducts = products.filter((product) => {
+    if (!productMatchesQuery(product, productSearch)) return false;
+    if (categoryFilter !== "all" && product.category !== categoryFilter) return false;
+    const isAvailable = product.active && !product.saleBlocked;
+    if (availabilityFilter === "available" && !isAvailable) return false;
+    if (availabilityFilter === "unavailable" && isAvailable) return false;
+    return true;
+  });
   const averagePrice = products.length
     ? products.reduce((sum, product) => sum + product.price, 0) / products.length
     : 0;
@@ -6184,10 +6354,37 @@ function ProductsView({
           </label>
 
           <div className="orders-toolbar-actions">
-            <button className="ghost-button" type="button">
+            <label className="filter-select-control">
               <Funnel size={17} />
-              Filtros
-            </button>
+              <span className="sr-only">Filtrar categoria</span>
+              <select
+                aria-label="Filtrar categoria"
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+              >
+                <option value="all">Todas as categorias</option>
+                {productCategories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </label>
+            <label className="filter-select-control">
+              <Package size={17} />
+              <span className="sr-only">Filtrar disponibilidade</span>
+              <select
+                aria-label="Filtrar disponibilidade"
+                value={availabilityFilter}
+                onChange={(event) => setAvailabilityFilter(event.target.value as "all" | "available" | "unavailable")}
+              >
+                <option value="all">Todos</option>
+                <option value="available">Disponíveis</option>
+                <option value="unavailable">Indisponíveis</option>
+              </select>
+              <ChevronDown size={15} />
+            </label>
             <button className="ghost-button" type="button">
               <Download size={17} />
               Exportar

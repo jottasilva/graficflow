@@ -2013,7 +2013,56 @@ button:disabled {
   padding: 0 14px;
 }
 
+.date-filter-control,
+.filter-select-control {
+  position: relative;
+  cursor: default;
+}
+
+.date-filter-control select,
+.filter-select-control select {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  outline: 0;
+  appearance: none;
+  padding: 0 22px 0 0;
+}
+
+.date-filter-control svg,
+.filter-select-control svg {
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.date-filter-control select {
+  max-width: 240px;
+}
+
+.filter-select-control {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--foreground);
+  padding: 0 12px;
+}
+
+.filter-select-control select {
+  max-width: 190px;
+}
+
 .dark .date-button {
+  color: #d0d7e6;
+}
+
+.dark .filter-select-control {
   color: #d0d7e6;
 }
 
