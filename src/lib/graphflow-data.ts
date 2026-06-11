@@ -226,6 +226,7 @@ export type QuoteItem = {
 
 export type Quote = {
   id: string;
+  publicQuoteId?: string;
   customerId: string;
   customerName: string;
   customerEmail: string;

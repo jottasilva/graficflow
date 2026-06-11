@@ -2,11 +2,16 @@ import type { Env } from "../../config/env.js";
 import type { AuthContext } from "../../http/middleware/auth.js";
 import type { LoginInput, RecoverPasswordInput, RegisterInput } from "../../http/schemas.js";
 import { badRequest, conflict, unauthorized, upstreamError } from "../../shared/errors/http-error.js";
-import type { SupabaseServiceClient } from "../../shared/supabase/client.js";
+import {
+  createSupabasePasswordAuthClient,
+  type SupabasePasswordAuthClient,
+  type SupabaseServiceClient,
+} from "../../shared/supabase/client.js";
 import { assertSupabaseOk } from "../../shared/supabase/result.js";
 import { randomId } from "../../shared/utils/ids.js";
+import { activeAuthProvider } from "./provider-selection.js";
 
-type KeycloakTokenResponse = {
+type AuthTokenResponse = {
   access_token: string;
   refresh_token?: string;
   expires_in?: number;
@@ -18,6 +23,12 @@ type KeycloakUser = {
   id: string;
   email?: string;
   username?: string;
+};
+
+type ProviderUser = {
+  id: string;
+  email?: string;
+  created: boolean;
 };
 
 type BootstrapAdminInput = {
@@ -69,9 +80,10 @@ export class AuthService {
   constructor(
     private readonly env: Env,
     private readonly supabase: SupabaseServiceClient,
+    private readonly passwordAuth: SupabasePasswordAuthClient = createSupabasePasswordAuthClient(env),
   ) {}
 
-  async login(input: LoginInput): Promise<KeycloakTokenResponse> {
+  async login(input: LoginInput): Promise<AuthTokenResponse> {
     if (
       this.env.NODE_ENV !== "production" &&
       this.env.DEV_AUTH_BYPASS &&
@@ -89,6 +101,33 @@ export class AuthService {
       };
     }
 
+    if (activeAuthProvider(this.env) === "supabase") {
+      return this.loginWithSupabase(input);
+    }
+
+    return this.loginWithKeycloak(input);
+  }
+
+  private async loginWithSupabase(input: LoginInput): Promise<AuthTokenResponse> {
+    const result = await this.passwordAuth.auth.signInWithPassword({
+      email: input.email,
+      password: input.password,
+    });
+
+    const session = result.data.session;
+    if (result.error || !session?.access_token) {
+      throw unauthorized("E-mail ou senha invalidos.");
+    }
+
+    return {
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+      expires_in: session.expires_in,
+      token_type: session.token_type ?? "Bearer",
+    };
+  }
+
+  private async loginWithKeycloak(input: LoginInput): Promise<AuthTokenResponse> {
     const body = new URLSearchParams({
       grant_type: "password",
       client_id: this.env.KEYCLOAK_CLIENT_ID,
@@ -97,13 +136,18 @@ export class AuthService {
       password: input.password,
     });
 
-    const response = await fetch(tokenEndpoint(this.env), {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
+    let response: Response;
+    try {
+      response = await fetch(tokenEndpoint(this.env), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+    } catch {
+      throw upstreamError("Servico de autenticacao indisponivel.");
+    }
 
-    const payload = (await response.json().catch(() => null)) as Partial<KeycloakTokenResponse> | null;
+    const payload = (await response.json().catch(() => null)) as Partial<AuthTokenResponse> | null;
 
     if (!response.ok || !payload?.access_token) {
       throw unauthorized("E-mail ou senha invalidos.");
@@ -120,17 +164,27 @@ export class AuthService {
 
   async register(input: RegisterInput) {
     const tenantId = randomId("ten");
-    const keycloakUser = await this.createKeycloakUser({
-      email: input.email,
-      password: input.password,
-      name: input.name,
-      companyName: input.companyName,
-      tenantId,
-      temporaryPassword: false,
-    });
+    const providerUser =
+      activeAuthProvider(this.env) === "supabase"
+        ? await this.createOrUpdateSupabaseUser({
+            email: input.email,
+            password: input.password,
+            name: input.name,
+            companyName: input.companyName,
+            tenantId,
+            role: "ADMIN",
+          })
+        : await this.createKeycloakUser({
+            email: input.email,
+            password: input.password,
+            name: input.name,
+            companyName: input.companyName,
+            tenantId,
+            temporaryPassword: false,
+          }).then((user) => ({ ...user, created: true }));
 
-    await this.upsertTenantAndUser({
-      subject: keycloakUser.id,
+    const profile = await this.upsertTenantAndUser({
+      subject: providerUser.id,
       tenantId,
       email: input.email,
       name: input.name,
@@ -139,13 +193,25 @@ export class AuthService {
     });
 
     return {
-      userId: keycloakUser.id,
+      userId: profile.userId,
+      authUserId: providerUser.id,
       tenantId,
       email: input.email,
+      provider: activeAuthProvider(this.env),
     };
   }
 
   async recoverPassword(input: RecoverPasswordInput) {
+    if (activeAuthProvider(this.env) === "supabase") {
+      await this.supabase.auth
+        .resetPasswordForEmail(input.email, {
+          redirectTo: this.env.SUPABASE_AUTH_CALLBACK_URL,
+        })
+        .catch(() => undefined);
+
+      return { delivered: true };
+    }
+
     try {
       const adminToken = await this.getAdminToken();
       const user = await this.findKeycloakUser(adminToken, input.email);
@@ -180,10 +246,39 @@ export class AuthService {
 
   async bootstrapAdmin(input: BootstrapAdminInput) {
     const tenantId = input.tenantId ?? "graphflow-main";
+
+    if (activeAuthProvider(this.env) === "supabase") {
+      const providerUser = await this.createOrUpdateSupabaseUser({
+        email: input.email,
+        password: input.password,
+        name: input.name,
+        companyName: input.companyName,
+        tenantId,
+        role: "ADMIN",
+      });
+
+      const profile = await this.upsertTenantAndUser({
+        subject: providerUser.id,
+        tenantId,
+        email: input.email,
+        name: input.name,
+        companyName: input.companyName,
+        role: "ADMIN",
+      });
+
+      return {
+        userId: profile.userId,
+        authUserId: providerUser.id,
+        tenantId,
+        created: providerUser.created,
+        provider: "supabase",
+      };
+    }
+
     const existing = await this.findUserByEmail(input.email);
 
     if (existing) {
-      await this.upsertTenantAndUser({
+      const profile = await this.upsertTenantAndUser({
         subject: existing.id,
         tenantId,
         email: input.email,
@@ -191,13 +286,13 @@ export class AuthService {
         companyName: input.companyName,
         role: "ADMIN",
       });
-      return { userId: existing.id, tenantId, created: false };
+      return { userId: profile.userId, tenantId, created: false, provider: "keycloak" };
     }
 
     const adminToken = await this.getAdminToken();
     const keycloakExisting = await this.findKeycloakUser(adminToken, input.email);
     if (keycloakExisting?.id) {
-      await this.upsertTenantAndUser({
+      const profile = await this.upsertTenantAndUser({
         subject: keycloakExisting.id,
         tenantId,
         email: input.email,
@@ -205,16 +300,19 @@ export class AuthService {
         companyName: input.companyName,
         role: "ADMIN",
       });
-      return { userId: keycloakExisting.id, tenantId, created: false };
+      return { userId: profile.userId, tenantId, created: false, provider: "keycloak" };
     }
 
     const keycloakUser = await this.createKeycloakUser({
-      ...input,
+      email: input.email,
+      password: input.password,
+      name: input.name,
+      companyName: input.companyName,
       tenantId,
       temporaryPassword: input.temporaryPassword ?? true,
     });
 
-    await this.upsertTenantAndUser({
+    const profile = await this.upsertTenantAndUser({
       subject: keycloakUser.id,
       tenantId,
       email: input.email,
@@ -223,7 +321,7 @@ export class AuthService {
       role: "ADMIN",
     });
 
-    return { userId: keycloakUser.id, tenantId, created: true };
+    return { userId: profile.userId, tenantId, created: true, provider: "keycloak" };
   }
 
   profile(auth: AuthContext) {
@@ -239,6 +337,105 @@ export class AuthService {
         provider: auth.provider,
       },
     };
+  }
+
+  private async createOrUpdateSupabaseUser(input: {
+    email: string;
+    password: string;
+    name: string;
+    companyName: string;
+    tenantId: string;
+    role: string;
+  }): Promise<ProviderUser> {
+    const existing = await this.findSupabaseAuthUser(input.email);
+    if (existing) {
+      await this.updateSupabaseAuthUser(existing.id, input);
+      return { ...existing, created: false };
+    }
+
+    const result = await this.supabase.auth.admin.createUser({
+      email: input.email,
+      password: input.password,
+      email_confirm: true,
+      app_metadata: {
+        tenantId: input.tenantId,
+        role: input.role,
+      },
+      user_metadata: {
+        name: input.name,
+        companyName: input.companyName,
+      },
+    });
+
+    if (result.error || !result.data.user?.id) {
+      const createdAfterConflict = await this.findSupabaseAuthUser(input.email);
+      if (createdAfterConflict) {
+        await this.updateSupabaseAuthUser(createdAfterConflict.id, input);
+        return { ...createdAfterConflict, created: false };
+      }
+
+      throw upstreamError("Supabase Auth nao conseguiu criar o usuario.");
+    }
+
+    return {
+      id: result.data.user.id,
+      email: result.data.user.email ?? input.email,
+      created: true,
+    };
+  }
+
+  private async updateSupabaseAuthUser(
+    userId: string,
+    input: {
+      email: string;
+      password: string;
+      name: string;
+      companyName: string;
+      tenantId: string;
+      role: string;
+    },
+  ) {
+    const result = await this.supabase.auth.admin.updateUserById(userId, {
+      email: input.email,
+      password: input.password,
+      email_confirm: true,
+      app_metadata: {
+        tenantId: input.tenantId,
+        role: input.role,
+      },
+      user_metadata: {
+        name: input.name,
+        companyName: input.companyName,
+      },
+    });
+
+    if (result.error) {
+      throw upstreamError("Supabase Auth nao conseguiu atualizar o usuario.");
+    }
+  }
+
+  private async findSupabaseAuthUser(email: string): Promise<ProviderUser | null> {
+    const normalizedEmail = email.toLowerCase();
+    const perPage = 1000;
+
+    for (let page = 1; page <= 10; page += 1) {
+      const result = await this.supabase.auth.admin.listUsers({ page, perPage });
+      if (result.error) throw upstreamError("Supabase Auth nao conseguiu buscar usuarios.");
+
+      const users = result.data.users ?? [];
+      const user = users.find((candidate) => candidate.email?.toLowerCase() === normalizedEmail);
+      if (user?.id) {
+        return {
+          id: user.id,
+          email: user.email ?? email,
+          created: false,
+        };
+      }
+
+      if (users.length < perPage) return null;
+    }
+
+    return null;
   }
 
   private async createKeycloakUser(input: BootstrapAdminInput & { tenantId: string }): Promise<KeycloakUser> {
@@ -372,7 +569,7 @@ export class AuthService {
     name: string;
     companyName: string;
     role: string;
-  }) {
+  }): Promise<{ userId: string }> {
     const now = new Date().toISOString();
     const tenant = await this.supabase
       .from("tenants")
@@ -388,21 +585,40 @@ export class AuthService {
       .single();
     assertSupabaseOk(tenant.error, "criar tenant");
 
+    const existing = await this.findUserByEmail(input.email);
+    const payload = {
+      tenantId: input.tenantId,
+      name: input.name,
+      email: input.email,
+      role: input.role,
+      permissions: ["*"],
+      status: "ACTIVE",
+      updatedAt: now,
+    };
+
+    if (existing?.id) {
+      const user = await this.supabase
+        .from("users")
+        .update(payload)
+        .eq("id", existing.id)
+        .select("id")
+        .single();
+      assertSupabaseOk(user.error, "atualizar perfil do usuario");
+      if (!user.data) throw upstreamError("Supabase nao retornou o perfil atualizado.");
+      return { userId: user.data.id };
+    }
+
     const user = await this.supabase
       .from("users")
-      .upsert({
+      .insert({
         id: input.subject,
-        tenantId: input.tenantId,
-        name: input.name,
-        email: input.email,
-        role: input.role,
-        permissions: ["*"],
-        status: "ACTIVE",
+        ...payload,
         createdAt: now,
-        updatedAt: now,
       })
       .select("id")
       .single();
     assertSupabaseOk(user.error, "criar perfil do usuario");
+    if (!user.data) throw upstreamError("Supabase nao retornou o perfil criado.");
+    return { userId: user.data.id };
   }
 }

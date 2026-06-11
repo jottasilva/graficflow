@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   AlertTriangle,
@@ -29,16 +29,18 @@ import {
   Funnel,
   GripVertical,
   Home,
+  Info,
   Layers3,
   LayoutGrid,
-  LayoutList,
   Lightbulb,
   Link2,
   LockKeyhole,
   LogOut,
   Mail,
+  MapPin,
   Menu,
   MessageCircle,
+  Minus,
   MoreVertical,
   Moon,
   Paperclip,
@@ -55,6 +57,7 @@ import {
   ShieldCheck,
   ShoppingBag,
   Sun,
+  Tag,
   Trash2,
   Truck,
   Upload,
@@ -102,6 +105,7 @@ import {
 } from "@/lib/graphflow-data";
 import { graphflowApi, type DashboardOverview } from "@/lib/graphflow-api";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -123,15 +127,29 @@ type ModalMode =
   | "machine"
   | "maintenance"
   | "expense"
+  | "quote"
   | "file"
   | null;
 
 type NewOrderDraft = {
+  orderNumber: string;
+  orderDate: string;
   customerId: string;
   productId: string;
   quantity: number;
   deliveryDate: string;
+  notes: string;
+  items: NewOrderItem[];
   fractions: Fraction[];
+  artFileName: string;
+  artFileUrl: string;
+};
+
+type NewOrderItem = {
+  id: string;
+  productId: string;
+  quantity: number;
+  note: string;
   artFileName: string;
   artFileUrl: string;
 };
@@ -201,6 +219,7 @@ type ProductDraft = {
   storageLocation: string;
   tracksBatch: boolean;
   fiscal: ProductFiscalData;
+  skipFiscalData: boolean;
   isResale: boolean;
   internalNotes: string;
   saleBlocked: boolean;
@@ -283,6 +302,26 @@ type UploadedFile = {
   path?: string;
 };
 
+const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const UPLOAD_MAX_LABEL = "25 MB";
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+async function safeUploadFile(
+  onUploadFile: (file: File, scope: UploadScope) => Promise<UploadedFile>,
+  file: File,
+  scope: UploadScope,
+) {
+  try {
+    return await onUploadFile(file, scope);
+  } catch {
+    return null;
+  }
+}
+
 type ProductionStage = {
   id: string;
   name: string;
@@ -342,15 +381,19 @@ function validateProductFiscalDraft(draft: ProductDraft) {
     ["Codigo interno / SKU", draft.sku],
     ["Descricao comercial", draft.commercialDescription],
     ["GTIN/EAN", draft.gtin],
-    ["NCM", fiscal.ncm],
-    ["Origem da mercadoria", fiscal.origin],
-    ["CFOP padrao saida", fiscal.cfop],
-    ["CST / CSOSN ICMS", fiscal.icmsCstCsosn],
-    ["CST PIS", fiscal.pisCst],
-    ["CST COFINS", fiscal.cofinsCst],
-    ["Aliquota ICMS", fiscal.icmsRate],
-    ["Aliquota PIS", fiscal.pisRate],
-    ["Aliquota COFINS", fiscal.cofinsRate],
+    ...(draft.skipFiscalData
+      ? []
+      : [
+          ["NCM", fiscal.ncm],
+          ["Origem da mercadoria", fiscal.origin],
+          ["CFOP padrao saida", fiscal.cfop],
+          ["CST / CSOSN ICMS", fiscal.icmsCstCsosn],
+          ["CST PIS", fiscal.pisCst],
+          ["CST COFINS", fiscal.cofinsCst],
+          ["Aliquota ICMS", fiscal.icmsRate],
+          ["Aliquota PIS", fiscal.pisRate],
+          ["Aliquota COFINS", fiscal.cofinsRate],
+        ] as Array<[string, string | number]>),
     ["Unidade comercial", draft.commercialUnit],
     ["Unidade de estoque", draft.stockUnit],
     ["Preco de venda", draft.price],
@@ -369,22 +412,25 @@ function validateProductFiscalDraft(draft: ProductDraft) {
 
   if (normalizeSku(draft.sku).length > 60) invalid.push("SKU deve ter no maximo 60 caracteres.");
   if (draft.commercialDescription.trim().length > 120) invalid.push("Descricao comercial deve ter no maximo 120 caracteres.");
-  if (!/^\d{8}$/.test(fiscal.ncm.trim())) invalid.push("NCM deve conter exatamente 8 digitos numericos.");
   if (!/^(SEM GTIN|\d{8}|\d{12}|\d{13}|\d{14})$/.test(normalizeGtin(draft.gtin))) {
     invalid.push("GTIN/EAN deve ter 8, 12, 13 ou 14 digitos, ou SEM GTIN.");
   }
-  if (!/^[567]\d{3}$/.test(fiscal.cfop.trim())) invalid.push("CFOP deve ter 4 digitos e iniciar com 5, 6 ou 7.");
-  if (!/^[0-8]$/.test(fiscal.origin.trim())) invalid.push("Origem da mercadoria deve ser um codigo de 0 a 8.");
 
-  [
-    ["Aliquota ICMS", fiscal.icmsRate],
-    ["Aliquota PIS", fiscal.pisRate],
-    ["Aliquota COFINS", fiscal.cofinsRate],
-    ["Aliquota IPI", fiscal.ipiRate],
-  ].forEach(([label, value]) => {
-    const raw = String(value).trim();
-    if (raw && !/^\d+(\.\d+)?$/.test(raw)) invalid.push(`${label} deve ser numerica e usar ponto decimal.`);
-  });
+  if (!draft.skipFiscalData) {
+    if (!/^\d{8}$/.test(fiscal.ncm.trim())) invalid.push("NCM deve conter exatamente 8 digitos numericos.");
+    if (!/^[567]\d{3}$/.test(fiscal.cfop.trim())) invalid.push("CFOP deve ter 4 digitos e iniciar com 5, 6 ou 7.");
+    if (!/^[0-8]$/.test(fiscal.origin.trim())) invalid.push("Origem da mercadoria deve ser um codigo de 0 a 8.");
+
+    [
+      ["Aliquota ICMS", fiscal.icmsRate],
+      ["Aliquota PIS", fiscal.pisRate],
+      ["Aliquota COFINS", fiscal.cofinsRate],
+      ["Aliquota IPI", fiscal.ipiRate],
+    ].forEach(([label, value]) => {
+      const raw = String(value).trim();
+      if (raw && !/^\d+(\.\d+)?$/.test(raw)) invalid.push(`${label} deve ser numerica e usar ponto decimal.`);
+    });
+  }
 
   [draft.commercialUnit, draft.stockUnit].forEach((unit) => {
     if (unit && !nfeUnits.has(unit.trim().toUpperCase())) {
@@ -401,7 +447,8 @@ function validateProductFiscalDraft(draft: ProductDraft) {
     if (raw && !/^\d+(\.\d{1,3})?$/.test(raw)) invalid.push(`${label} deve ser numerico, exemplo 0.500.`);
   });
 
-  if (!fiscal.cest.trim()) alerts.push("CEST vazio: preencha se houver ICMS-ST.");
+  if (draft.skipFiscalData) alerts.push("Dados fiscais desativados para este cadastro.");
+  if (!draft.skipFiscalData && !fiscal.cest.trim()) alerts.push("CEST vazio: preencha se houver ICMS-ST.");
   if (!draft.netWeightKg.trim()) alerts.push("Peso liquido vazio: recomendado para NF-e com frete.");
   if (!draft.grossWeightKg.trim()) alerts.push("Peso bruto vazio: recomendado para cotacao e frete.");
   if (!draft.storageLocation.trim()) alerts.push("Local de armazenagem vazio.");
@@ -443,7 +490,7 @@ function productFromDraft(draft: ProductDraft, id: string): Product {
     packageDimensionsCm: draft.packageDimensionsCm.trim(),
     storageLocation: draft.storageLocation.trim(),
     tracksBatch: draft.tracksBatch,
-    fiscal: { ...draft.fiscal },
+    fiscal: draft.skipFiscalData ? undefined : { ...draft.fiscal },
     isResale: draft.isResale,
     internalNotes: draft.internalNotes.trim(),
     leadTime: "2 dias",
@@ -452,38 +499,42 @@ function productFromDraft(draft: ProductDraft, id: string): Product {
   };
 }
 
-function productFiscalReady(product: Product) {
+function productHasFiscalData(product: Product) {
   const fiscal = product.fiscal;
   return Boolean(
-    product.sku &&
-      product.commercialDescription &&
-      product.gtin &&
-      fiscal &&
-      /^\d{8}$/.test(fiscal.ncm) &&
-      /^[0-8]$/.test(fiscal.origin) &&
-      /^[567]\d{3}$/.test(fiscal.cfop) &&
-      fiscal.icmsCstCsosn &&
-      fiscal.pisCst &&
-      fiscal.cofinsCst &&
-      fiscal.icmsRate &&
-      fiscal.pisRate &&
-      fiscal.cofinsRate &&
-      product.commercialUnit &&
-      product.stockUnit,
+    fiscal &&
+      [fiscal.ncm, fiscal.icmsCstCsosn, fiscal.pisCst, fiscal.cofinsCst, fiscal.icmsRate, fiscal.pisRate, fiscal.cofinsRate].some(
+        (value) => String(value ?? "").trim().length > 0,
+      ),
   );
 }
 
 const defaultOrderDraft = (products: Product[], clients: Client[]): NewOrderDraft => ({
+  orderNumber: "",
+  orderDate: todayInputDate(),
   customerId: clients[0]?.id ?? "",
   productId: products[0]?.id ?? "",
   quantity: products[0]?.minOrderQty ?? 50,
   deliveryDate: dateInputAfterDays(7),
+  notes: "",
+  items: products[0]
+    ? [
+        {
+          id: "order-item-1",
+          productId: products[0].id,
+          quantity: products[0].minOrderQty ?? 50,
+          note: "",
+          artFileName: "",
+          artFileUrl: "",
+        },
+      ]
+    : [],
   artFileName: "",
   artFileUrl: "",
   fractions: [
     {
       id: "fraction-1",
-      quantity: products[0]?.minFractionQty ?? 50,
+      quantity: products[0]?.minOrderQty ?? 50,
       color: firstProductColor(products[0]),
       note: "Variação principal",
     },
@@ -572,6 +623,7 @@ const defaultProductDraft: ProductDraft = {
   storageLocation: "",
   tracksBatch: false,
   fiscal: defaultProductFiscal,
+  skipFiscalData: false,
   isResale: false,
   internalNotes: "",
   saleBlocked: false,
@@ -624,43 +676,8 @@ const defaultFileDraft: FileDraft = {
   notes: "",
 };
 
-const defaultQuoteDraft = (products: Product[], clients: Client[]): QuoteDraft => {
+const defaultQuoteDraft = (clients: Client[]): QuoteDraft => {
   const client = clients.find((item) => item.id === "cli-pixel") ?? clients[0];
-  const folderProduct = products.find((item) => item.id === "prod-adesivos") ?? products[0];
-  const cardProduct = products.find((item) => item.id === "prod-cartoes") ?? products[1] ?? products[0];
-  const bannerProduct = products.find((item) => item.id === "prod-banners") ?? products[2] ?? products[0];
-  const items = [
-    folderProduct
-      ? {
-          id: "quote-draft-folder",
-          productId: folderProduct.id,
-          productName: "Folder A4",
-          quantity: 500,
-          unitPrice: 1.2,
-          total: 600,
-        }
-      : null,
-    cardProduct
-      ? {
-          id: "quote-draft-card",
-          productId: cardProduct.id,
-          productName: "Cartão de Visita",
-          quantity: 1000,
-          unitPrice: 0.35,
-          total: 350,
-        }
-      : null,
-    bannerProduct
-      ? {
-          id: "quote-draft-banner",
-          productId: bannerProduct.id,
-          productName: "Banner 80x120cm",
-          quantity: 1,
-          unitPrice: 85,
-          total: 85,
-        }
-      : null,
-  ].filter(Boolean) as QuoteItem[];
 
   return {
     customerId: client?.id ?? "",
@@ -676,7 +693,7 @@ const defaultQuoteDraft = (products: Product[], clients: Client[]): QuoteDraft =
     discountType: "currency",
     notes: "Orçamento sujeito à disponibilidade de estoque e aprovação da arte final.",
     internalNotes: "",
-    items,
+    items: [],
   };
 };
 
@@ -706,8 +723,8 @@ const viewCopy: Record<ViewKey, { title: string; eyebrow: string }> = {
     eyebrow: "CRM com histórico, receita e contatos principais.",
   },
   users: {
-    title: "Usuarios",
-    eyebrow: "Operadores, clientes, permissoes e acesso por setor.",
+    title: "Contatos",
+    eyebrow: "Relacionamentos que impulsionam seu negócio.",
   },
   support: {
     title: "Atendimento",
@@ -779,6 +796,34 @@ const iconByView: Record<ViewKey, LucideIcon> = {
   settings: Settings,
 };
 
+type ViewTheme = { primary: string; secondary: string };
+
+const sectionThemes: Record<string, ViewTheme> = {
+  operation: { primary: "#236dff", secondary: "#4f46ff" },
+  catalog: { primary: "#ff7a00", secondary: "#ff5500" },
+  management: { primary: "#10b95b", secondary: "#08a841" },
+};
+
+const viewThemes: Record<ViewKey, ViewTheme> = {
+  dashboard: { primary: "#5b45ff", secondary: "#7c4dff" },
+  orders: sectionThemes.operation,
+  production: sectionThemes.operation,
+  clients: sectionThemes.management,
+  users: sectionThemes.management,
+  support: { primary: "#16b981", secondary: "#0f9f62" },
+  products: sectionThemes.catalog,
+  catalog: sectionThemes.catalog,
+  inventory: sectionThemes.catalog,
+  machines: sectionThemes.operation,
+  sectors: sectionThemes.operation,
+  quotes: sectionThemes.management,
+  finance: sectionThemes.management,
+  reports: { primary: "#236dff", secondary: "#5b45ff" },
+  files: sectionThemes.catalog,
+  notifications: { primary: "#ee3045", secondary: "#ff7a00" },
+  settings: sectionThemes.management,
+};
+
 const navSections: Array<{ id: string; label: string; items: ViewKey[] }> = [
   {
     id: "operation",
@@ -827,10 +872,41 @@ const financeEntryIcons: Record<FinanceEntry["type"], LucideIcon> = {
   cash: WalletCards,
 };
 
-const STORAGE_KEY = "graphflow.frontend.v1";
 const QUOTE_DRAFT_STORAGE_KEY = "graphflow.quote.draft.v1";
 const QUOTE_PUBLIC_LINKS_STORAGE_KEY = "graphflow.quote.public-links.v1";
 const PROFILE_COMPLETION_NOTICE_KEY = "graphflow.profile-completion-notice.v1";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "graphflow.sidebarCollapsed";
+
+function createClientId(prefix: string) {
+  return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+}
+
+function randomHex(bytes: number) {
+  const values = new Uint8Array(bytes);
+
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(values);
+  } else {
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  return Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function createLocalDocumentNumber(prefix: string, existingNumbers: Array<string | undefined>) {
+  const now = new Date();
+  const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const used = new Set(existingNumbers.filter((number): number is string => Boolean(number)));
+
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const candidate = `${prefix}-${date}-${randomHex(3)}`;
+    if (!used.has(candidate)) return candidate;
+  }
+
+  return `${prefix}-${date}-${Date.now().toString(16).slice(-6).toUpperCase()}`;
+}
 
 function loadQuotePublicLinks(): Record<string, string> {
   if (typeof window === "undefined") return {};
@@ -870,17 +946,34 @@ function mergeQuotePublicLinks(quotes: Quote[]) {
   }));
 }
 
-function loadSavedQuoteDraft(products: Product[], clients: Client[]): QuoteDraft | null {
+const legacySeededQuoteItems: Record<string, Pick<QuoteItem, "quantity" | "unitPrice">> = {
+  "quote-draft-folder": { quantity: 500, unitPrice: 1.2 },
+  "quote-draft-card": { quantity: 1000, unitPrice: 0.35 },
+  "quote-draft-banner": { quantity: 1, unitPrice: 85 },
+};
+
+function isLegacySeededQuoteDraft(draft: QuoteDraft) {
+  if (draft.items.length !== Object.keys(legacySeededQuoteItems).length) return false;
+
+  return draft.items.every((item) => {
+    const legacyItem = legacySeededQuoteItems[item.id];
+    return legacyItem && item.quantity === legacyItem.quantity && item.unitPrice === legacyItem.unitPrice;
+  });
+}
+
+function loadSavedQuoteDraft(clients: Client[]): QuoteDraft | null {
   if (typeof window === "undefined") return null;
   try {
     const saved = window.localStorage.getItem(QUOTE_DRAFT_STORAGE_KEY);
     if (!saved) return null;
     const parsed = JSON.parse(saved) as QuoteDraft;
     if (!parsed || !Array.isArray(parsed.items)) return null;
-    return {
-      ...defaultQuoteDraft(products, clients),
+    const draft = {
+      ...defaultQuoteDraft(clients),
       ...parsed,
     };
+
+    return isLegacySeededQuoteDraft(draft) ? null : draft;
   } catch {
     return null;
   }
@@ -889,7 +982,10 @@ function loadSavedQuoteDraft(products: Product[], clients: Client[]): QuoteDraft
 export function GraphFlowApp() {
   const [view, setView] = useState<ViewKey>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
+  });
   const [query, setQuery] = useState("");
   const [dark, setDark] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -907,7 +1003,7 @@ export function GraphFlowApp() {
   const [sectors, setSectors] = useState<Sector[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [productionStages, setProductionStages] =
-    useState<ProductionStage[]>([]);
+    useState<ProductionStage[]>(defaultProductionStages);
   const [productionStageFocusSignal, setProductionStageFocusSignal] = useState(0);
   const [finance, setFinance] = useState<FinanceEntry[]>([]);
   const [notifications, setNotifications] =
@@ -932,10 +1028,22 @@ export function GraphFlowApp() {
     useState<ExpenseDraft>(defaultExpenseDraft);
   const [fileDraft, setFileDraft] = useState<FileDraft>(defaultFileDraft);
   const [quoteDraft, setQuoteDraft] = useState<QuoteDraft>(() =>
-    defaultQuoteDraft([], []),
+    defaultQuoteDraft([]),
   );
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
+
+  const createNotification = useCallback((item: Omit<NotificationItem, "id" | "read" | "time">) => {
+    setNotifications((current) => [
+      {
+        id: createClientId("not"),
+        time: "agora",
+        read: false,
+        ...item,
+      },
+      ...current,
+    ]);
+  }, []);
 
   function productToDraft(product: Product): ProductDraft {
     return {
@@ -971,6 +1079,7 @@ export function GraphFlowApp() {
       storageLocation: product.storageLocation ?? "",
       tracksBatch: product.tracksBatch ?? false,
       fiscal: { ...defaultProductFiscal, ...(product.fiscal ?? {}) },
+      skipFiscalData: !productHasFiscalData(product),
       isResale: product.isResale ?? false,
       internalNotes: product.internalNotes ?? "",
       saleBlocked: product.saleBlocked ?? false,
@@ -985,7 +1094,7 @@ export function GraphFlowApp() {
     }));
   }
 
-  async function refreshWorkspace() {
+  const refreshWorkspace = useCallback(async () => {
     if (!graphflowApi.enabled()) return;
 
     try {
@@ -1008,7 +1117,7 @@ export function GraphFlowApp() {
       setFiles(workspace.files);
       setNotifications(workspace.notifications);
       setOrderDraft(defaultOrderDraft(workspace.products, workspace.clients));
-      setQuoteDraft(loadSavedQuoteDraft(workspace.products, workspace.clients) ?? defaultQuoteDraft(workspace.products, workspace.clients));
+      setQuoteDraft(loadSavedQuoteDraft(workspace.clients) ?? defaultQuoteDraft(workspace.clients));
       setDashboardOverview(overview);
     } catch (error) {
       createNotification({
@@ -1019,7 +1128,7 @@ export function GraphFlowApp() {
     } finally {
       setDataLoading(false);
     }
-  }
+  }, [createNotification]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -1064,7 +1173,7 @@ export function GraphFlowApp() {
       window.removeEventListener("focus", syncAcceptedQuotes);
       document.removeEventListener("visibilitychange", syncAcceptedQuotes);
     };
-  }, []);
+  }, [refreshWorkspace]);
 
   useEffect(() => {
     if (!graphflowApi.enabled()) {
@@ -1116,7 +1225,7 @@ export function GraphFlowApp() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshWorkspace]);
 
   useEffect(() => {
     if (!authenticated || !authUserId || !users.length) {
@@ -1129,6 +1238,8 @@ export function GraphFlowApp() {
       return;
     }
 
+    let shouldNotify = false;
+
     try {
       const notified = JSON.parse(
         window.localStorage.getItem(PROFILE_COMPLETION_NOTICE_KEY) ?? "{}",
@@ -1138,24 +1249,32 @@ export function GraphFlowApp() {
         return;
       }
 
-      createNotification({
-        tone: "info",
-        title: "Complete seu cadastro",
-        message: "Revise telefone, endereco, setor e dados operacionais para liberar o perfil completo.",
-      });
-
       window.localStorage.setItem(
         PROFILE_COMPLETION_NOTICE_KEY,
         JSON.stringify({ ...notified, [currentUser.id]: true }),
       );
+
+      shouldNotify = true;
     } catch {
+      shouldNotify = true;
+    }
+
+    if (!shouldNotify) {
+      return;
+    }
+
+    const noticeTimer = window.setTimeout(() => {
       createNotification({
         tone: "info",
         title: "Complete seu cadastro",
         message: "Revise telefone, endereco, setor e dados operacionais para liberar o perfil completo.",
       });
-    }
-  }, [authenticated, authUserId, users]);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(noticeTimer);
+    };
+  }, [authenticated, authUserId, users, createNotification]);
 
   const selectedProduct = useMemo(
     () => products.find((product) => product.id === orderDraft.productId),
@@ -1167,7 +1286,21 @@ export function GraphFlowApp() {
     [clients, orderDraft.customerId],
   );
 
-  const orderTotal = calculateOrderTotal(selectedProduct, orderDraft.quantity);
+  const orderItemProducts = useMemo(
+    () =>
+      orderDraft.items
+        .map((item) => ({
+          item,
+          product: products.find((product) => product.id === item.productId),
+        }))
+        .filter((entry): entry is { item: NewOrderItem; product: Product } => Boolean(entry.product)),
+    [orderDraft.items, products],
+  );
+
+  const orderTotal = orderItemProducts.reduce(
+    (total, { item, product }) => total + calculateOrderTotal(product, item.quantity),
+    0,
+  );
   const fractionTotal = sumFractions(orderDraft.fractions);
 
   const orderValidation = useMemo(() => {
@@ -1175,12 +1308,17 @@ export function GraphFlowApp() {
       return "Selecione um cliente válido.";
     }
 
-    if (!selectedProduct) {
-      return "Selecione um produto válido.";
+    if (orderItemProducts.length === 0) {
+      return "Adicione pelo menos um item ao pedido.";
     }
 
-    if (orderDraft.quantity < selectedProduct.minOrderQty) {
-      return `Quantidade mínima: ${formatNumber(selectedProduct.minOrderQty)}.`;
+    const invalidItem = orderItemProducts.find(({ item, product }) => item.quantity < product.minOrderQty);
+    if (invalidItem) {
+      return `Quantidade mínima de ${invalidItem.product.name}: ${formatNumber(invalidItem.product.minOrderQty)}.`;
+    }
+
+    if (orderItemProducts.some(({ item }) => item.quantity <= 0)) {
+      return "Todos os itens precisam ter quantidade válida.";
     }
 
     if (orderDraft.deliveryDate && orderDraft.deliveryDate < todayInputDate()) {
@@ -1189,6 +1327,10 @@ export function GraphFlowApp() {
 
     if (orderDraft.fractions.length === 0) {
       return null;
+    }
+
+    if (!selectedProduct) {
+      return "Selecione um produto válido.";
     }
 
     if (!selectedProduct.allowsFractions) {
@@ -1213,7 +1355,15 @@ export function GraphFlowApp() {
     }
 
     return null;
-  }, [fractionTotal, orderDraft.deliveryDate, orderDraft.fractions, orderDraft.quantity, selectedClient, selectedProduct]);
+  }, [
+    fractionTotal,
+    orderDraft.deliveryDate,
+    orderDraft.fractions,
+    orderDraft.quantity,
+    orderItemProducts,
+    selectedClient,
+    selectedProduct,
+  ]);
 
   const filteredOrders = useMemo(
     () => orders.filter((order) => orderMatchesQuery(order, query)),
@@ -1236,16 +1386,16 @@ export function GraphFlowApp() {
 
   const unreadCount = notifications.filter((notification) => !notification.read).length;
   const currentCopy = viewCopy[view];
+  const currentTheme = viewThemes[view];
+  const appThemeStyle = {
+    "--primary": currentTheme.primary,
+    "--primary-2": currentTheme.secondary,
+    "--screen-tone": currentTheme.primary,
+    "--screen-tone-2": currentTheme.secondary,
+  } as CSSProperties;
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("graphflow.sidebarCollapsed");
-    if (saved) {
-      setSidebarCollapsed(saved === "true");
-    }
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem("graphflow.sidebarCollapsed", String(sidebarCollapsed));
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(sidebarCollapsed));
   }, [sidebarCollapsed]);
 
   function openModal(mode: Exclude<ModalMode, null>) {
@@ -1276,6 +1426,10 @@ export function GraphFlowApp() {
     if (mode === "expense") {
       setExpenseDraft(defaultExpenseDraft);
     }
+    if (mode === "quote") {
+      setQuoteDraft(loadSavedQuoteDraft(clients) ?? defaultQuoteDraft(clients));
+      setView("quotes");
+    }
     if (mode === "file") {
       setFileDraft(defaultFileDraft);
     }
@@ -1300,27 +1454,34 @@ export function GraphFlowApp() {
     setModalMode("product-edit");
   }
 
-  function createNotification(item: Omit<NotificationItem, "id" | "read" | "time">) {
-    setNotifications((current) => [
-      {
-        id: `not-${Date.now()}`,
-        time: "agora",
-        read: false,
-        ...item,
-      },
-      ...current,
-    ]);
-  }
-
   async function uploadFile(file: File, scope: UploadScope): Promise<UploadedFile> {
-    if (graphflowApi.enabled()) {
-      const uploaded = await graphflowApi.uploadFile(file, scope);
+    if (file.size > UPLOAD_MAX_BYTES) {
+      const message = `${file.name} tem ${formatFileSize(file.size)}. O limite atual é ${UPLOAD_MAX_LABEL}.`;
       createNotification({
-        tone: "success",
-        title: "Upload concluido",
-        message: `${uploaded.name} foi enviado com seguranca para o storage.`,
+        tone: "warning",
+        title: "Arquivo muito grande",
+        message,
       });
-      return uploaded;
+      throw new Error(message);
+    }
+
+    if (graphflowApi.enabled()) {
+      try {
+        const uploaded = await graphflowApi.uploadFile(file, scope);
+        createNotification({
+          tone: "success",
+          title: "Upload concluido",
+          message: `${uploaded.name} foi enviado com seguranca para o storage.`,
+        });
+        return uploaded;
+      } catch (error) {
+        createNotification({
+          tone: "danger",
+          title: "Upload nao enviado",
+          message: error instanceof Error ? error.message : "Nao foi possivel enviar o arquivo.",
+        });
+        throw error;
+      }
     }
 
     const url = await new Promise<string>((resolve, reject) => {
@@ -1341,23 +1502,40 @@ export function GraphFlowApp() {
   async function createOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (orderValidation || !selectedProduct || !selectedClient) {
+    if (orderValidation || !selectedClient || orderItemProducts.length === 0) {
       return;
     }
 
-    const assignedMachine = machines.find((machine) => machine.sector === selectedProduct.sector);
-    const selectedSector = sectors.find((sector) => sector.name === selectedProduct.sector);
+    const primaryItem = orderItemProducts[0].item;
+    const primaryProduct = orderItemProducts[0].product;
+    const assignedMachine = machines.find((machine) => machine.sector === primaryProduct.sector);
+    const selectedSector = sectors.find((sector) => sector.name === primaryProduct.sector);
+    const totalQuantity = orderItemProducts.reduce((total, { item }) => total + item.quantity, 0);
+    const orderProductLabel =
+      orderItemProducts.length === 1
+        ? primaryProduct.name
+        : `${primaryProduct.name} + ${orderItemProducts.length - 1} item(s)`;
 
     if (graphflowApi.enabled()) {
       try {
         const nextOrder = await graphflowApi.createOrder(
           {
             customerId: selectedClient.id,
-            product: selectedProduct,
-            quantity: orderDraft.quantity,
+            product: primaryProduct,
+            quantity: primaryItem.quantity,
             deliveryDate: orderDraft.deliveryDate,
             machineId: assignedMachine?.id,
             sectorId: selectedSector?.id,
+            items: orderItemProducts.map(({ item, product }) => {
+              const productMachine = machines.find((machine) => machine.sector === product.sector);
+              const productSector = sectors.find((sector) => sector.name === product.sector);
+              return {
+                product,
+                quantity: item.quantity,
+                machineId: productMachine?.id,
+                sectorId: productSector?.id,
+              };
+            }),
           },
           clients,
           products,
@@ -1368,7 +1546,7 @@ export function GraphFlowApp() {
           await graphflowApi.createFile({
             name: orderDraft.artFileName.trim(),
             type: "Arte",
-            linkedTo: `${nextOrder.number ?? nextOrder.id} · ${selectedProduct.name}`,
+            linkedTo: `${nextOrder.number ?? nextOrder.id} · ${primaryProduct.name}`,
             size: "arquivo externo",
           }).catch(() => null);
         }
@@ -1390,18 +1568,17 @@ export function GraphFlowApp() {
       return;
     }
 
-    const nextNumber =
-      Math.max(...orders.map((order) => Number(order.id.replace(/\D/g, ""))), 1247) + 1;
+    const nextNumber = createLocalDocumentNumber("PED", orders.map((order) => order.number ?? order.id));
     const nextOrder: Order = {
-      id: `#${nextNumber}`,
-      number: `#${nextNumber}`,
+      id: nextNumber,
+      number: nextNumber,
       customer: selectedClient.name,
-      product: selectedProduct.name,
-      productId: selectedProduct.id,
-      sector: selectedProduct.sector,
+      product: orderProductLabel,
+      productId: primaryProduct.id,
+      sector: primaryProduct.sector,
       machineId: assignedMachine?.id,
       responsible: "Carla Nunes",
-      quantity: orderDraft.quantity,
+      quantity: totalQuantity,
       total: orderTotal,
       status: "approval",
       progress: 5,
@@ -1416,13 +1593,21 @@ export function GraphFlowApp() {
         ? [
             {
               id: `art-${Date.now()}`,
-              productName: selectedProduct.name,
+              productName: primaryProduct.name,
               name: orderDraft.artFileName.trim(),
               url: orderDraft.artFileUrl.trim() || "#",
               size: "arquivo externo",
             },
           ]
-        : [],
+        : orderItemProducts
+            .filter(({ item }) => item.artFileName.trim())
+            .map(({ item, product }, index) => ({
+              id: `art-${Date.now()}-${index}`,
+              productName: product.name,
+              name: item.artFileName.trim(),
+              url: item.artFileUrl.trim() || "#",
+              size: "arquivo externo",
+            })),
     };
 
     setOrders((current) => [nextOrder, ...current]);
@@ -1439,22 +1624,38 @@ export function GraphFlowApp() {
       ),
     );
     setInventory((current) =>
-      current.map((item) =>
-        item.name === selectedProduct.stockItem
-          ? {
-              ...item,
-              quantity: Math.max(0, item.quantity - Math.ceil(orderDraft.quantity / 100)),
-              lastMove: "agora",
-            }
-          : item,
-      ),
+      current.map((inventoryItem) => {
+        const matchingItems = orderItemProducts.filter(
+          ({ product }) => product.stockItem === inventoryItem.name,
+        );
+        if (matchingItems.length === 0) {
+          return inventoryItem;
+        }
+
+        const usedQuantity = matchingItems.reduce(
+          (total, { item }) => total + Math.ceil(item.quantity / 100),
+          0,
+        );
+        return {
+          ...inventoryItem,
+          quantity: Math.max(0, inventoryItem.quantity - usedQuantity),
+          lastMove: "agora",
+        };
+      }),
     );
     setSectors((current) =>
-      current.map((sector) =>
-        sector.name === selectedProduct.sector
-          ? { ...sector, orders: sector.orders + 1, capacity: Math.min(100, sector.capacity + 3) }
-          : sector,
-      ),
+      current.map((sector) => {
+        const sectorItems = orderItemProducts.filter(({ product }) => product.sector === sector.name);
+        if (sectorItems.length === 0) {
+          return sector;
+        }
+
+        return {
+          ...sector,
+          orders: sector.orders + 1,
+          capacity: Math.min(100, sector.capacity + sectorItems.length * 3),
+        };
+      }),
     );
     setFinance((current) =>
       current.map((entry) =>
@@ -2213,22 +2414,6 @@ export function GraphFlowApp() {
     setView("inventory");
   }
 
-  function scheduleMachineMaintenance() {
-    const machine = machines.find((item) => item.status !== "Manutenção");
-
-    if (!machine) {
-      createNotification({
-        tone: "info",
-        title: "Máquinas em manutenção",
-        message: "Todas as máquinas já estão marcadas para manutenção.",
-      });
-      setView("machines");
-      return;
-    }
-
-    void openMachineMaintenance(machine.id);
-  }
-
   function openMachineMaintenance(machineId: string) {
     const machine = machines.find((item) => item.id === machineId);
 
@@ -2617,6 +2802,54 @@ export function GraphFlowApp() {
     );
   }
 
+  async function clearReadNotificationsWithConfirm() {
+    const readNotifications = notifications.filter((notification) => notification.read);
+
+    if (readNotifications.length === 0) {
+      createNotification({
+        tone: "info",
+        title: "Nenhuma exclusao pendente",
+        message: "Nao existem avisos lidos para remover.",
+      });
+      setView("notifications");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Remover ${readNotifications.length} aviso(s) ja lido(s)? Esta acao nao remove avisos pendentes.`,
+    );
+
+    if (!confirmed) return;
+
+    if (graphflowApi.enabled()) {
+      try {
+        await Promise.all(readNotifications.map((notification) => graphflowApi.deleteNotification(notification.id)));
+        await refreshWorkspace();
+        createNotification({
+          tone: "success",
+          title: "Avisos removidos",
+          message: `${readNotifications.length} aviso(s) lido(s) foram removidos com seguranca.`,
+        });
+      } catch (error) {
+        createNotification({
+          tone: "danger",
+          title: "Exclusao nao concluida",
+          message: error instanceof Error ? error.message : "Falha ao conectar com o backend.",
+        });
+      }
+      setView("notifications");
+      return;
+    }
+
+    setNotifications((current) => current.filter((notification) => !notification.read));
+    createNotification({
+      tone: "success",
+      title: "Avisos removidos",
+      message: `${readNotifications.length} aviso(s) lido(s) foram removidos.`,
+    });
+    setView("notifications");
+  }
+
   async function restockItem(itemId: string, quantity: number) {
     const item = inventory.find((entry) => entry.id === itemId);
 
@@ -2829,6 +3062,16 @@ export function GraphFlowApp() {
   async function createQuoteFromDraft(status: QuoteStatus = "Enviado") {
     const client = clients.find((item) => item.id === quoteDraft.customerId) ?? clients[0];
     const items = quoteDraft.items.filter((item) => item.quantity > 0 && item.unitPrice >= 0);
+    const quoteSubtotal = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const quoteDiscount =
+      quoteDraft.discountType === "percent"
+        ? quoteSubtotal * (Math.min(quoteDraft.discount, 100) / 100)
+        : quoteDraft.discount;
+    const quoteTax = Math.max(0, quoteSubtotal - quoteDiscount) * 0.05;
+    const itemsWithDescriptions = items.map((item) => ({
+      ...item,
+      notes: quoteItemDescription(item.productName).join(", "),
+    }));
 
     if (!client) {
       createNotification({
@@ -2856,7 +3099,29 @@ export function GraphFlowApp() {
             validUntil: quoteDraft.validUntil,
             notes: quoteDraft.notes.trim(),
             internalNotes: quoteDraft.internalNotes.trim(),
-            items,
+            discountAmount: Number(quoteDiscount.toFixed(2)),
+            taxAmount: Number(quoteTax.toFixed(2)),
+            metadata: {
+              issueDate: quoteDraft.issueDate,
+              paymentCondition: quoteDraft.paymentCondition,
+              productionDeadline: quoteDraft.productionDeadline,
+              contactName: quoteDraft.contactName.trim(),
+              customerEmail: quoteDraft.customerEmail.trim(),
+              customerPhone: quoteDraft.customerPhone.trim(),
+              responsible: quoteDraft.responsible.trim(),
+              discountType: quoteDraft.discountType,
+              discountValue: quoteDraft.discount,
+              customerSnapshot: {
+                id: client.id,
+                name: client.name,
+                company: client.company,
+                email: quoteDraft.customerEmail.trim() || client.email,
+                phone: quoteDraft.customerPhone.trim() || client.phone,
+                document: client.document,
+                address: client.address,
+              },
+            },
+            items: itemsWithDescriptions,
             sendNow: status !== "Rascunho",
           },
           clients,
@@ -2879,6 +3144,7 @@ export function GraphFlowApp() {
           window.localStorage.removeItem(QUOTE_DRAFT_STORAGE_KEY);
         }
         setView("quotes");
+        setModalMode(null);
       } catch (error) {
         createNotification({
           tone: "danger",
@@ -2889,7 +3155,7 @@ export function GraphFlowApp() {
       return;
     }
 
-    const id = `ORC-${String(Date.now()).slice(-6)}`;
+    const id = createLocalDocumentNumber("ORC", quotes.map((quote) => quote.id));
     const nextQuote: Quote = {
       id,
       customerId: client.id,
@@ -2918,6 +3184,7 @@ export function GraphFlowApp() {
       window.localStorage.removeItem(QUOTE_DRAFT_STORAGE_KEY);
     }
     setView("quotes");
+    setModalMode(null);
   }
 
   async function updateMachine(
@@ -3023,8 +3290,9 @@ export function GraphFlowApp() {
   function getHeaderAction(): HeaderAction | null {
     switch (view) {
       case "dashboard":
-      case "orders":
         return { label: "Novo Pedido", icon: ClipboardList, onClick: () => openModal("order") };
+      case "orders":
+        return { label: "Novo Pedido", icon: Plus, onClick: () => openModal("order") };
       case "production":
         return {
           label: "Novo Estágio",
@@ -3034,7 +3302,7 @@ export function GraphFlowApp() {
       case "clients":
         return { label: "Novo Cliente", icon: UserPlus, onClick: () => openModal("client") };
       case "users":
-        return { label: "Novo Usuario", icon: UserCog, onClick: () => openModal("user") };
+        return { label: "Novo contato", icon: UserPlus, onClick: () => openModal("user") };
       case "support":
         return {
           label: "Abrir WhatsApp",
@@ -3056,10 +3324,7 @@ export function GraphFlowApp() {
         return {
           label: "Novo Orçamento",
           icon: FileText,
-          onClick: () => {
-            setQuoteDraft(defaultQuoteDraft(products, clients));
-            setView("quotes");
-          },
+          onClick: () => openModal("quote"),
         };
       case "finance":
         return { label: "Nova Despesa", icon: CreditCard, onClick: () => openModal("expense") };
@@ -3078,6 +3343,7 @@ export function GraphFlowApp() {
 
   const currentHeaderAction = authenticated ? getHeaderAction() : null;
   const HeaderActionIcon = currentHeaderAction?.icon;
+  const PageHeaderIcon = view === "orders" ? ClipboardList : view === "catalog" ? Package : view === "users" ? Users : null;
   const selectedOrder = selectedOrderId
     ? orders.find((order) => order.id === selectedOrderId)
     : undefined;
@@ -3103,7 +3369,7 @@ export function GraphFlowApp() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell theme-${view}`} style={appThemeStyle}>
       <Sidebar
         view={view}
         onViewChange={(nextView) => {
@@ -3138,12 +3404,12 @@ export function GraphFlowApp() {
 
         <div className="page-frame">
           {dataLoading ? <div className="data-loading">Atualizando dados do banco...</div> : null}
-          {view !== "quotes" && view !== "support" ? (
+          {view !== "quotes" && view !== "support" && view !== "settings" && view !== "finance" ? (
           <header className="page-header">
-            <div className={view === "orders" ? "page-title-with-icon" : undefined}>
-              {view === "orders" ? (
+            <div className={PageHeaderIcon ? "page-title-with-icon" : undefined}>
+              {PageHeaderIcon ? (
                 <span className="page-title-icon">
-                  <ClipboardList size={30} />
+                  <PageHeaderIcon size={30} />
                 </span>
               ) : null}
               <div>
@@ -3152,16 +3418,18 @@ export function GraphFlowApp() {
               </div>
             </div>
             <div className="header-actions">
-              <button
-                className="date-button"
-                type="button"
-                aria-label="Selecionar data"
-                title="Selecionar data"
-              >
-                <CalendarDays size={18} />
-                <span>Hoje, 24 de Maio de 2025</span>
-                <ChevronDown size={16} />
-              </button>
+              {view !== "users" ? (
+                <button
+                  className="date-button"
+                  type="button"
+                  aria-label="Selecionar data"
+                  title="Selecionar data"
+                >
+                  <CalendarDays size={18} />
+                  <span>Hoje, 24 de Maio de 2025</span>
+                  <ChevronDown size={16} />
+                </button>
+              ) : null}
               {currentHeaderAction && HeaderActionIcon ? (
                 <button
                   className="primary-button"
@@ -3186,6 +3454,8 @@ export function GraphFlowApp() {
               sectors={sectors}
               onOpenModal={openModal}
               onViewChange={setView}
+              onRefreshData={refreshData}
+              onClearReadNotifications={clearReadNotificationsWithConfirm}
             />
           ) : null}
 
@@ -3262,8 +3532,7 @@ export function GraphFlowApp() {
               products={products}
               onCreateOrder={() => openModal("order")}
               onCreateQuote={() => {
-                setQuoteDraft(defaultQuoteDraft(products, clients));
-                setView("quotes");
+                openModal("quote");
               }}
               onViewChange={setView}
             />
@@ -3281,12 +3550,36 @@ export function GraphFlowApp() {
           {view === "catalog" ? (
             <CatalogView
               products={filteredProducts}
+              onManageCategories={() => setView("products")}
               onSelectProduct={(productId) => {
+                const product = products.find((currentProduct) => currentProduct.id === productId);
+                const quantity = product?.minOrderQty ?? 50;
                 setOrderDraft({
                   ...defaultOrderDraft(products, clients),
                   productId,
-                  quantity:
-                    products.find((product) => product.id === productId)?.minOrderQty ?? 50,
+                  quantity,
+                  items: product
+                    ? [
+                        {
+                          id: createClientId("order-item"),
+                          productId: product.id,
+                          quantity,
+                          note: "",
+                          artFileName: "",
+                          artFileUrl: "",
+                        },
+                      ]
+                    : [],
+                  fractions: product?.allowsFractions
+                    ? [
+                        {
+                          id: "fraction-1",
+                          quantity,
+                          color: firstProductColor(product),
+                          note: "Variação principal",
+                        },
+                      ]
+                    : [],
                 });
                 setModalMode("order");
               }}
@@ -3327,14 +3620,8 @@ export function GraphFlowApp() {
 
           {view === "quotes" ? (
             <QuotesView
-              draft={quoteDraft}
               quotes={quotes}
-              clients={clients}
-              products={products}
-              onDraftChange={setQuoteDraft}
-              onAddClient={() => openModal("client")}
-              onSaveDraft={() => createQuoteFromDraft("Rascunho")}
-              onGenerate={() => createQuoteFromDraft("Enviado")}
+              onCreateQuote={() => openModal("quote")}
             />
           ) : null}
 
@@ -3396,7 +3683,6 @@ export function GraphFlowApp() {
             products={products}
             draft={orderDraft}
             onDraftChange={setOrderDraft}
-            selectedProduct={selectedProduct}
             orderTotal={orderTotal}
             fractionTotal={fractionTotal}
             validation={orderValidation}
@@ -3469,6 +3755,19 @@ export function GraphFlowApp() {
           />
         ) : null}
 
+        {modalMode === "quote" ? (
+          <QuoteEditor
+            draft={quoteDraft}
+            quotes={quotes}
+            clients={clients}
+            products={products}
+            onDraftChange={setQuoteDraft}
+            onAddClient={() => openModal("client")}
+            onSaveDraft={() => createQuoteFromDraft("Rascunho")}
+            onGenerate={() => createQuoteFromDraft("Enviado")}
+          />
+        ) : null}
+
         {modalMode === "file" ? (
           <FileForm draft={fileDraft} onUploadFile={uploadFile} onDraftChange={setFileDraft} onSubmit={createFile} />
         ) : null}
@@ -3479,17 +3778,74 @@ export function GraphFlowApp() {
 
 function AuthLoadingScreen() {
   return (
-    <main className="login-screen">
-      <section className="auth-card auth-loading-card" aria-label="Carregando sessao">
-        <Image
-          src={GRAPHFLOW_LOGO_SRC}
-          alt="GraficFlow"
-          width={260}
-          height={148}
-          style={{ width: 260, height: 148, objectFit: "contain" }}
-          priority
-        />
-        <span>Validando sessao segura...</span>
+    <main className="login-screen auth-validation-screen">
+      <section className="auth-validation-card" aria-label="Validando sessão segura">
+        <div className="auth-validation-content">
+          <aside className="auth-validation-brand" aria-label="GraphFlow">
+            <Image
+              src={GRAPHFLOW_LOGO_SRC}
+              alt="GraficFlow"
+              width={360}
+              height={118}
+              className="auth-validation-logo"
+              priority
+            />
+          </aside>
+
+          <div className="auth-validation-divider" aria-hidden="true" />
+
+          <section className="auth-validation-panel">
+            <div className="auth-secure-orbit" aria-hidden="true">
+              <span className="auth-orbit-dot auth-orbit-dot-green" />
+              <span className="auth-orbit-dot auth-orbit-dot-blue-left" />
+              <span className="auth-orbit-dot auth-orbit-dot-blue-right" />
+              <span className="auth-secure-ring">
+                <ShieldCheck size={44} strokeWidth={2.1} />
+              </span>
+            </div>
+
+            <div className="auth-validation-copy">
+              <h1>Validando sessão segura</h1>
+              <p>Estamos verificando sua sessão. Isso pode levar alguns segundos.</p>
+            </div>
+
+            <div className="auth-session-steps" aria-label="Etapas de validação">
+              <div className="auth-session-step is-done">
+                <span>
+                  <Check size={18} />
+                </span>
+                <strong>Verificando credenciais</strong>
+              </div>
+              <i className="auth-step-line is-complete" aria-hidden="true" />
+              <div className="auth-session-step is-active">
+                <span>
+                  <b aria-hidden="true" />
+                </span>
+                <strong>Validando sessão</strong>
+              </div>
+              <i className="auth-step-line" aria-hidden="true" />
+              <div className="auth-session-step">
+                <span>
+                  <LockKeyhole size={17} />
+                </span>
+                <strong>Finalizando</strong>
+              </div>
+            </div>
+
+            <div className="auth-security-note">
+              <ShieldCheck size={30} />
+              <div>
+                <strong>Sua segurança é nossa prioridade.</strong>
+                <span>Não feche esta janela.</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer className="auth-validation-footer">
+          <LockKeyhole size={16} />
+          <span>Conexão segura e criptografada</span>
+        </footer>
       </section>
     </main>
   );
@@ -3560,9 +3916,19 @@ function Sidebar({
               .filter(Boolean) as typeof navItems;
             const isExpanded = expandedSections[section.id];
             const hasActiveItem = section.items.includes(view);
+            const sectionTheme = viewThemes[hasActiveItem ? view : section.items[0]];
 
             return (
-              <section className={`nav-section ${hasActiveItem ? "has-active" : ""}`} key={section.id}>
+              <section
+                className={`nav-section section-${section.id} ${hasActiveItem ? "has-active" : ""}`}
+                key={section.id}
+                style={
+                  {
+                    "--section-color": sectionTheme.primary,
+                    "--section-color-2": sectionTheme.secondary,
+                  } as CSSProperties
+                }
+              >
                 <button
                   className="nav-section-toggle"
                   type="button"
@@ -3577,12 +3943,19 @@ function Sidebar({
                   {sectionItems.map((item) => {
                     const Icon = iconByView[item.id];
                     const badge = item.id === "notifications" ? unreadCount : item.badge;
+                    const itemTheme = viewThemes[item.id];
 
                     return (
                       <button
                         className={`nav-item ${item.id === "support" ? "support-nav" : ""} ${view === item.id ? "active" : ""}`}
                         type="button"
                         key={item.id}
+                        style={
+                          {
+                            "--item-tone": itemTheme.primary,
+                            "--item-tone-2": itemTheme.secondary,
+                          } as CSSProperties
+                        }
                         onClick={() => onViewChange(item.id)}
                         aria-label={item.label}
                         title={collapsed ? item.label : undefined}
@@ -3669,6 +4042,7 @@ function Topbar({
           const Icon = iconByView[itemId];
           const item = navItems.find((navItem) => navItem.id === itemId);
           const badge = itemId === "notifications" ? unreadCount : undefined;
+          const itemTheme = viewThemes[itemId];
 
           return (
             <button
@@ -3676,9 +4050,11 @@ function Topbar({
               type="button"
               key={itemId}
               style={
-                itemId === "support"
-                  ? { background: "#16b981", borderColor: "#16b981", color: "#ffffff" }
-                  : undefined
+                {
+                  "--item-tone": itemTheme.primary,
+                  "--item-tone-2": itemTheme.secondary,
+                  ...(itemId === "support" ? { background: itemTheme.primary, borderColor: itemTheme.primary, color: "#ffffff" } : {}),
+                } as CSSProperties
               }
               onClick={() => onViewChange(itemId)}
               aria-current={view === itemId ? "page" : undefined}
@@ -3781,6 +4157,8 @@ function DashboardView({
   sectors,
   onOpenModal,
   onViewChange,
+  onRefreshData,
+  onClearReadNotifications,
 }: {
   overview: DashboardOverview | null;
   orders: Order[];
@@ -3790,6 +4168,8 @@ function DashboardView({
   sectors: Sector[];
   onOpenModal: (mode: Exclude<ModalMode, null>) => void;
   onViewChange: (view: ViewKey) => void;
+  onRefreshData: () => void;
+  onClearReadNotifications: () => void;
 }) {
   const receivable = sumFinance(finance, "receivable");
   const orderRevenue = orders.reduce((sum, order) => sum + order.total, 0);
@@ -3822,6 +4202,42 @@ function DashboardView({
 
   return (
     <>
+      <section className="database-action-cards" aria-label="Acoes de banco e operacao">
+        <DatabaseActionCard
+          icon={RefreshCw}
+          title="Banco"
+          description="Sincronizar dados"
+          detail={`${formatNumber(orders.length)} pedidos carregados`}
+          tone="#236dff"
+          onClick={onRefreshData}
+        />
+        <DatabaseActionCard
+          icon={UserPlus}
+          title="Cadastros"
+          description="Novo cliente"
+          detail="Cliente, produto e pedido"
+          tone="#10b95b"
+          onClick={() => onOpenModal("client")}
+        />
+        <DatabaseActionCard
+          icon={Trash2}
+          title="Exclusoes"
+          description="Limpar lidos"
+          detail="Requer confirmacao"
+          tone="#ee3045"
+          danger
+          onClick={onClearReadNotifications}
+        />
+        <DatabaseActionCard
+          icon={BellRing}
+          title="Avisos"
+          description={`${formatNumber(unreadNotifications)} pendente(s)`}
+          detail={`${formatNumber(notifications.length)} no painel`}
+          tone="#ff7a00"
+          onClick={() => onViewChange("notifications")}
+        />
+      </section>
+
       <section className="kpi-grid">
         <MetricCard
           title="Pedidos"
@@ -4088,14 +4504,6 @@ function OrdersView({
               <Funnel size={17} />
               Filtros
             </button>
-            <div className="orders-view-toggle" aria-label="Alternar visualizacao">
-              <button className="active" type="button" title="Lista">
-                <LayoutList size={18} />
-              </button>
-              <button type="button" title="Grade">
-                <LayoutGrid size={18} />
-              </button>
-            </div>
             <button className="primary-button" type="button" onClick={onCreateOrder}>
               <Plus size={18} />
               Novo Pedido
@@ -4103,7 +4511,7 @@ function OrdersView({
           </div>
         </div>
 
-        <div className="orders-table-scroll">
+        <div className="orders-table-scroll no-scrollbar">
           <table className="orders-table">
             <thead>
               <tr>
@@ -4442,99 +4850,173 @@ function ClientsView({
   clients: Client[];
   onCreateClient: () => void;
 }) {
+  const [clientSearch, setClientSearch] = useState("");
   const [page, setPage] = useState(1);
   const pageSize = 8;
-  const pageCount = Math.max(1, Math.ceil(clients.length / pageSize));
+  const filteredClients = clients.filter((client) => {
+    const query = normalizeText(clientSearch);
+    if (!query) return true;
+    return normalizeText([
+      client.name,
+      client.company,
+      client.document,
+      client.documentType,
+      client.email,
+      client.phone,
+      client.whatsapp,
+      client.city,
+      client.address?.street,
+      client.address?.number,
+    ].filter(Boolean).join(" ")).includes(query);
+  });
+  const pageCount = Math.max(1, Math.ceil(filteredClients.length / pageSize));
   const currentPage = Math.min(page, pageCount);
-  const paginatedClients = clients.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedClients = filteredClients.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
-    <section className="clients-page table-card">
-      <div className="table-toolbar">
-        <div>
-          <strong>{clients.length} clientes</strong>
-          <span>Pagina com 2 linhas de 4 cards</span>
+    <section className="clients-reference-page table-card">
+      <div className="clients-reference-toolbar">
+        <div className="clients-reference-title">
+          <span>
+            <Users size={30} />
+          </span>
+          <div>
+            <strong>{formatNumber(filteredClients.length)} clientes</strong>
+            <em>Página com 2 linhas de 4 cards</em>
+          </div>
         </div>
-        <button className="primary-button" type="button" onClick={onCreateClient}>
-          <UserPlus size={18} />
-          Novo Cliente
-        </button>
-      </div>
-      <div className="clients-grid">
-      {paginatedClients.map((client) => (
-        <article className="operation-card" key={client.id}>
-          <div className="card-head">
-            <span>{client.company}</span>
-            <ClientStatus status={client.status} />
-          </div>
-          <div className="client-card-identity">
-            <div
-              className="client-card-avatar"
-              style={client.avatarUrl ? { backgroundImage: `url(${client.avatarUrl})` } : undefined}
-              aria-hidden="true"
-            >
-              {!client.avatarUrl ? client.name.slice(0, 2).toUpperCase() : null}
-            </div>
-            <div>
-              <h3>{client.name}</h3>
-              <p>
-                {client.documentType ?? "Doc."} {client.document ?? "não informado"}
-              </p>
-            </div>
-          </div>
-          <p>{client.address?.street ? `${client.address.street}, ${client.address.number}` : client.city}</p>
-          <div className="contact-list">
-            <span>
-              <Mail size={15} />
-              {client.email}
-            </span>
-            <span>
-              <Phone size={15} />
-              {client.phone}
-            </span>
-            {client.whatsapp ? (
-              <span>
-                <MessageCircle size={15} />
-                {client.whatsapp}
-              </span>
-            ) : null}
-          </div>
-          <div className="metric-strip">
-            <span>
-              <strong>{client.orders}</strong>
-              pedidos
-            </span>
-            <span>
-              <strong>{formatCurrency(client.revenue)}</strong>
-              receita
-            </span>
-          </div>
-        </article>
-      ))}
-      {!paginatedClients.length ? (
-        <div className="empty-state">
-          <Users size={20} />
-          Nenhum cliente encontrado.
+
+        <label className="clients-search">
+          <Search size={18} />
+          <input
+            type="search"
+            placeholder="Buscar cliente, CNPJ, email ou telefone..."
+            value={clientSearch}
+            onChange={(event) => {
+              setClientSearch(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+
+        <div className="clients-toolbar-actions">
+          <button className="ghost-button" type="button">
+            <Funnel size={17} />
+            Filtros
+            <ChevronDown size={15} />
+          </button>
         </div>
-      ) : null}
       </div>
-      <div className="pagination-row">
+
+      <div className={`clients-card-grid count-${Math.min(Math.max(paginatedClients.length, 1), 4)}`}>
+        {paginatedClients.map((client) => {
+          const addressLine = client.address?.street
+            ? `${client.address.street}${client.address.number ? `, ${client.address.number}` : ""}`
+            : client.city || "Endereço não informado";
+          const clientInitial = (client.name || client.company || "C").slice(0, 1).toUpperCase();
+
+          return (
+            <article className="client-reference-card" key={client.id}>
+              <div className="client-reference-head">
+                <span>{client.company || client.name}</span>
+                <ClientStatus status={client.status} />
+              </div>
+
+              <div className="client-reference-identity">
+                <div className="client-reference-avatar" aria-hidden="true">
+                  {clientInitial}
+                  {client.avatarUrl ? (
+                    <Image
+                      src={client.avatarUrl}
+                      alt=""
+                      fill
+                      sizes="74px"
+                      unoptimized
+                      onError={(event) => {
+                        event.currentTarget.style.display = "none";
+                      }}
+                    />
+                  ) : null}
+                </div>
+                <div>
+                  <h3>{client.name}</h3>
+                  <p>{client.documentType ?? "Doc."} {client.document ?? "não informado"}</p>
+                </div>
+              </div>
+
+              <div className="client-address-line">
+                <MapPin size={17} />
+                <span>{addressLine}</span>
+              </div>
+
+              <div className="client-contact-list">
+                <span>
+                  <Mail size={18} />
+                  {client.email || "Email não informado"}
+                </span>
+                <span>
+                  <Phone size={18} />
+                  {client.phone || "Telefone não informado"}
+                </span>
+                <span>
+                  <MessageCircle size={18} />
+                  {client.whatsapp || client.phone || "WhatsApp não informado"}
+                </span>
+              </div>
+
+              <div className="client-reference-metrics">
+                <span className="orders">
+                  <ShoppingBag size={22} />
+                  <strong>{formatNumber(client.orders)}</strong>
+                  <em>pedidos</em>
+                </span>
+                <span className="revenue">
+                  <CircleDollarSign size={26} />
+                  <strong>{formatCurrency(client.revenue)}</strong>
+                  <em>receita</em>
+                </span>
+              </div>
+
+              <button className="client-history-button" type="button">
+                <span>
+                  <CalendarDays size={18} />
+                  Ver histórico
+                </span>
+                <ChevronRight size={22} />
+              </button>
+            </article>
+          );
+        })}
+
+        {!paginatedClients.length ? (
+          <div className="empty-state clients-empty-state">
+            <Users size={22} />
+            Nenhum cliente encontrado.
+            <button className="primary-button compact" type="button" onClick={onCreateClient}>
+              <UserPlus size={16} />
+              Novo Cliente
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="clients-pagination">
         <span>
-          Pagina {currentPage} de {pageCount} - {clients.length} clientes
+          Página {currentPage} de {pageCount} · {filteredClients.length} {filteredClients.length === 1 ? "cliente" : "clientes"}
         </span>
         <div>
-          <button className="ghost-button compact" type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
+          <button className="ghost-button" type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
             Anterior
           </button>
-          <button className="ghost-button compact" type="button" disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
-            Proxima
+          <button className="orders-page-number" type="button">{currentPage}</button>
+          <button className="ghost-button" type="button" disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
+            Próxima
           </button>
         </div>
       </div>
     </section>
   );
 }
-
 function SupportView({
   clients,
   orders,
@@ -4606,12 +5088,6 @@ function SupportView({
         ];
   }, [clients, orders, products]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
-
-  useEffect(() => {
-    if (!supportConversations.some((conversation) => conversation.id === selectedConversationId)) {
-      setSelectedConversationId(supportConversations[0]?.id ?? "");
-    }
-  }, [selectedConversationId, supportConversations]);
 
   const activeConversation =
     supportConversations.find((conversation) => conversation.id === selectedConversationId) ??
@@ -4958,6 +5434,15 @@ const permissionOptions: Array<{ key: string; label: string }> = [
   { key: "quotes:write", label: "Orcamentos editar" },
   { key: "finance:read", label: "Financeiro ver" },
   { key: "finance:write", label: "Financeiro editar" },
+  { key: "suppliers:read", label: "Fornecedores ver" },
+  { key: "suppliers:write", label: "Fornecedores editar" },
+  { key: "purchases:read", label: "Compras ver" },
+  { key: "purchases:write", label: "Compras editar" },
+  { key: "payments:read", label: "Pagamentos ver" },
+  { key: "payments:write", label: "Pagamentos editar" },
+  { key: "fiscal:read", label: "Fiscal ver" },
+  { key: "fiscal:write", label: "Fiscal editar" },
+  { key: "audit:read", label: "Auditoria" },
   { key: "reports:read", label: "Relatorios" },
   { key: "files:read", label: "Arquivos ver" },
   { key: "files:write", label: "Arquivos editar" },
@@ -4986,7 +5471,36 @@ function UsersView({
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [passwordDraft, setPasswordDraft] = useState("");
   const [userDrafts, setUserDrafts] = useState<Record<string, Partial<UserAccount>>>({});
+  const [contactSearch, setContactSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 4;
   const selectedUser = selectedUserId ? users.find((user) => user.id === selectedUserId) : undefined;
+  const filteredUsers = users.filter((user) => {
+    const query = normalizeText(contactSearch);
+    if (!query) return true;
+    const sectorNames = sectors
+      .filter((sector) => user.sectorIds.includes(sector.id))
+      .map((sector) => sector.name)
+      .join(" ");
+
+    return normalizeText([
+      user.name,
+      user.email,
+      user.phone,
+      user.whatsapp,
+      user.department,
+      user.jobTitle,
+      user.role,
+      user.type,
+      user.document,
+      sectorNames,
+    ].filter(Boolean).join(" ")).includes(query);
+  });
+  const pageCount = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const paginatedUsers = filteredUsers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const fromItem = filteredUsers.length ? (currentPage - 1) * pageSize + 1 : 0;
+  const toItem = Math.min(currentPage * pageSize, filteredUsers.length);
 
   function userEditDraft(user: UserAccount): Partial<UserAccount> {
     return {
@@ -5045,239 +5559,172 @@ function UsersView({
     });
   }
 
+  function openUser(user: UserAccount) {
+    setUserDrafts((current) => ({ ...current, [user.id]: userEditDraft(user) }));
+    setPasswordDraft("");
+    setSelectedUserId(user.id);
+  }
+
+  function userRoleLabel(user: UserAccount) {
+    if (user.jobTitle) return user.jobTitle;
+    if (user.role === "ADMIN") return "Administrador";
+    if (user.role === "MANAGER") return "Gerente";
+    if (user.role === "FINANCE") return "Financeiro";
+    if (user.role === "CLIENT") return "Cliente";
+    return "Operador";
+  }
+
+  function userTypeLabel(user: UserAccount) {
+    if (user.type === "CLIENT") return "Cliente";
+    if (user.type === "ADMIN") return "Admin";
+    return "Operador";
+  }
+
+  function userStatusLabel(user: UserAccount) {
+    if (user.status === "Convidado") return "Em negociação";
+    return user.status;
+  }
+
+  function userSince(user: UserAccount) {
+    const value = user.admissionDate || user.createdAt || "";
+    if (!value) return "sem data";
+    const normalized = value.includes("T") ? value.slice(0, 10) : value;
+    const [year, month] = normalized.split("-");
+    const monthNames = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+    const monthIndex = Number(month) - 1;
+    if (year && monthNames[monthIndex]) return `${monthNames[monthIndex]}/${year}`;
+    return value;
+  }
+
   return (
-    <section className="users-page">
-      <div className="table-toolbar">
-        <div>
-          <strong>{users.length} usuarios</strong>
-          <span>Permissoes, setores e perfis de acesso</span>
-        </div>
-        <button className="primary-button" type="button" onClick={onCreateUser}>
-          <UserCog size={18} />
-          Novo Usuario
+    <section className="contacts-page table-card">
+      <div className="contacts-toolbar">
+        <label className="contacts-search">
+          <Search size={22} />
+          <input
+            type="search"
+            placeholder="Buscar por nome, email, empresa ou telefone..."
+            value={contactSearch}
+            onChange={(event) => {
+              setContactSearch(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <button className="ghost-button contacts-filter-button" type="button">
+          <Funnel size={20} />
+          Filtros
         </button>
       </div>
 
-      <div className="entity-list users-list">
-        {users.map((user) => {
-          const editing = false;
-          const draft = draftForUser(user);
+      <div className="contacts-list">
+        {paginatedUsers.map((user) => {
           const sectorNames = sectors
             .filter((sector) => user.sectorIds.includes(sector.id))
-            .map((sector) => sector.name)
-            .join(", ");
-          const profileStatus = user.profileComplete ? "Completo" : "Pendente";
+            .map((sector) => sector.name);
+          const organization = user.department || "GraphFlow";
+          const businessArea = sectorNames[0] || user.shift || user.role;
+          const avatarInitials = user.name.slice(0, 2).toUpperCase();
+          const typeLabel = userTypeLabel(user);
+          const statusLabel = userStatusLabel(user);
 
           return (
-            <article className="entity-row user-row" key={user.id}>
-              <div
-                className="entity-avatar"
-                style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}
-                aria-hidden="true"
-              >
-                {!user.avatarUrl ? user.name.slice(0, 2).toUpperCase() : null}
-              </div>
-
-              <div className="entity-copy">
-                <div className="entity-line primary">
-                  <div>
-                    <h3>{user.name}</h3>
-                    <span>{user.email}</span>
-                  </div>
-                  <div className="entity-pills">
-                    <span>{user.type === "CLIENT" ? "Cliente" : user.type === "ADMIN" ? "Admin" : "Operador"}</span>
-                    <span className={`user-status ${normalizeText(user.status)}`}>{user.status}</span>
-                  </div>
-                </div>
-                <div className="entity-line secondary">
-                  <span><ShieldCheck size={14} /> {user.role}</span>
-                  <span><Phone size={14} /> {user.phone || "Nao informado"}</span>
-                  <span><Building2 size={14} /> {user.department || user.jobTitle || "Sem cargo"}</span>
-                  <span><Layers3 size={14} /> {sectorNames || "Sem setor vinculado"}</span>
-                  <span><Clock3 size={14} /> Cadastro {user.createdAt || "sem data"}</span>
-                  <span><CheckCircle2 size={14} /> {profileStatus}</span>
-                </div>
-              </div>
-              <div className="card-head">
-                <span>{user.type === "CLIENT" ? "Cliente" : user.type === "ADMIN" ? "Admin" : "Operador"}</span>
-                <ClientStatus status={user.status === "Ativo" ? "Ativo" : user.status === "Suspenso" ? "Inativo" : "Atenção"} />
-              </div>
-
-              <div className="client-card-identity">
-                <div
-                  className="client-card-avatar"
-                  style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}
-                  aria-hidden="true"
-                >
-                  {!user.avatarUrl ? user.name.slice(0, 2).toUpperCase() : null}
-                </div>
-                <div>
-                  <h3>{user.name}</h3>
-                  <p>{user.email}</p>
-                </div>
-              </div>
-
-              <div className="settings-list compact">
-                <SettingsLine icon={ShieldCheck} label="Perfil" value={user.role} />
-                <SettingsLine icon={Phone} label="Telefone" value={user.phone || "Nao informado"} />
-                <SettingsLine icon={FileText} label="Documento" value={user.document || "Nao informado"} />
-              </div>
-
-              {editing ? (
-                <div className="user-permission-editor">
-                  <div className="field-grid three">
-                    <TextField label="Nome" value={String(draft.name ?? "")} onChange={(value) => updateDraft(user, { name: value })} />
-                    <TextField label="E-mail" type="email" value={String(draft.email ?? "")} onChange={(value) => updateDraft(user, { email: value })} />
-                    <TextField label="Telefone" value={String(draft.phone ?? "")} onChange={(value) => updateDraft(user, { phone: value })} />
-                    <TextField label="Documento" value={String(draft.document ?? "")} onChange={(value) => updateDraft(user, { document: value })} />
-                    <TextField label="Imagem" value={String(draft.avatarUrl ?? "")} onChange={(value) => updateDraft(user, { avatarUrl: value })} />
-                    <label>
-                      Tipo
-                      <select
-                        value={draft.type ?? user.type}
-                        onChange={(event) => updateDraft(user, { type: event.target.value as UserAccount["type"] })}
-                      >
-                        <option value="OPERATOR">Operador</option>
-                        <option value="CLIENT">Cliente</option>
-                        <option value="ADMIN">Admin</option>
-                      </select>
-                    </label>
-                    <label>
-                      Perfil
-                      <select
-                        value={draft.role ?? user.role}
-                        onChange={(event) => updateDraft(user, { role: event.target.value as UserAccount["role"] })}
-                      >
-                        <option value="ADMIN">Admin</option>
-                        <option value="MANAGER">Gerente</option>
-                        <option value="OPERATOR">Operador</option>
-                        <option value="FINANCE">Financeiro</option>
-                        <option value="CLIENT">Cliente</option>
-                        <option value="VIEWER">Leitura</option>
-                      </select>
-                    </label>
-                    <label>
-                      Status
-                      <select
-                        value={draft.status ?? user.status}
-                        onChange={(event) => updateDraft(user, { status: event.target.value as UserAccount["status"] })}
-                      >
-                        <option value="Ativo">Ativo</option>
-                        <option value="Convidado">Convidado</option>
-                        <option value="Suspenso">Suspenso</option>
-                        <option value="Inativo">Inativo</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="permission-chip-grid">
-                    {permissionOptions.map((permission) => {
-                      const active = (draft.permissions ?? user.permissions).includes(permission.key);
-                      return (
-                        <button
-                          className={`permission-chip ${active ? "active" : ""}`}
-                          type="button"
-                          key={permission.key}
-                          onClick={() =>
-                            updateDraft(user, {
-                              permissions: active
-                                ? (draft.permissions ?? user.permissions).filter((item) => item !== permission.key)
-                                : [...(draft.permissions ?? user.permissions), permission.key],
-                            })
-                          }
-                        >
-                          {active ? <Check size={14} /> : <Plus size={14} />}
-                          {permission.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="permission-chip-grid">
-                    {sectors.map((sector) => {
-                      const active = (draft.sectorIds ?? user.sectorIds).includes(sector.id);
-                      return (
-                        <button
-                          className={`permission-chip sector ${active ? "active" : ""}`}
-                          type="button"
-                          key={sector.id}
-                          onClick={() =>
-                            updateDraft(user, {
-                              sectorIds: active
-                                ? (draft.sectorIds ?? user.sectorIds).filter((item) => item !== sector.id)
-                                : [...(draft.sectorIds ?? user.sectorIds), sector.id],
-                            })
-                          }
-                        >
-                          {active ? <Check size={14} /> : <Layers3 size={14} />}
-                          {sector.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <form
-                    className="user-password-form"
-                    onSubmit={async (event) => {
-                      event.preventDefault();
-                      const password = passwordDraft.trim();
-                      if (!password) return;
-                      await onUpdatePassword(user.id, password);
-                      setPasswordDraft("");
+            <article className="contact-row" key={user.id}>
+              <div className="contact-avatar" aria-hidden="true">
+                {avatarInitials}
+                {user.avatarUrl ? (
+                  <Image
+                    src={user.avatarUrl}
+                    alt=""
+                    fill
+                    sizes="106px"
+                    unoptimized
+                    onError={(event) => {
+                      event.currentTarget.style.display = "none";
                     }}
-                  >
-                    <input
-                      value={passwordDraft}
-                      minLength={8}
-                      placeholder="Nova senha temporaria"
-                      type="password"
-                      onChange={(event) => setPasswordDraft(event.target.value)}
-                    />
-                    <button className="ghost-button compact" type="submit">
-                      <LockKeyhole size={16} />
-                      Trocar senha
-                    </button>
-                  </form>
-                  <div className="inline-actions">
-                    <button className="primary-button compact" type="button" onClick={() => void saveUser(user)}>
-                      <Save size={16} />
-                      Salvar usuario
-                    </button>
-                    <button className="ghost-button compact" type="button" onClick={() => setSelectedUserId(null)}>
-                      <X size={16} />
-                      Cancelar
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+                  />
+                ) : null}
+              </div>
 
-              <div className="entity-actions">
-                <button
-                  className="ghost-button compact"
-                  type="button"
-                  onClick={() => {
-                    setUserDrafts((current) => ({ ...current, [user.id]: userEditDraft(user) }));
-                    setPasswordDraft("");
-                    setSelectedUserId(user.id);
-                  }}
-                >
-                  <Pencil size={16} />
+              <div className="contact-content">
+                <h3>{user.name}</h3>
+                <p>{userRoleLabel(user)} <span aria-hidden="true">•</span> {organization}</p>
+                <div className="contact-line">
+                  <span>
+                    <Mail size={17} />
+                    {user.email}
+                  </span>
+                  <i aria-hidden="true" />
+                  <span>
+                    <Phone size={17} />
+                    {user.whatsapp || user.phone || "Telefone não informado"}
+                  </span>
+                </div>
+                <div className="contact-line secondary">
+                  <span>
+                    <Building2 size={17} />
+                    {organization}
+                  </span>
+                  <i aria-hidden="true" />
+                  <span>
+                    <ChartNoAxesColumn size={17} />
+                    {businessArea}
+                  </span>
+                  <i aria-hidden="true" />
+                  <span>
+                    <CalendarDays size={17} />
+                    Desde {userSince(user)}
+                  </span>
+                  <span className={`contact-type-pill ${normalizeText(typeLabel)}`}>{typeLabel}</span>
+                </div>
+              </div>
+
+              <span className={`contact-status ${normalizeText(statusLabel)}`}>{statusLabel}</span>
+
+              <div className="contact-actions">
+                <button className="ghost-button contact-edit-button" type="button" onClick={() => openUser(user)}>
+                  <Pencil size={20} />
                   Editar
                 </button>
                 <button
-                  className="icon-button danger-action"
+                  className="icon-button contact-delete-button"
                   type="button"
                   aria-label={`Excluir ${user.name}`}
-                  title="Excluir usuario"
+                  title="Excluir contato"
                   onClick={() => void onDeleteUser(user.id)}
                 >
-                  <Trash2 size={16} />
+                  <Trash2 size={20} />
                 </button>
               </div>
             </article>
           );
         })}
+
+        {!paginatedUsers.length ? (
+          <div className="empty-state contacts-empty-state">
+            <Users size={22} />
+            Nenhum contato encontrado.
+            <button className="primary-button compact" type="button" onClick={onCreateUser}>
+              <UserPlus size={16} />
+              Novo contato
+            </button>
+          </div>
+        ) : null}
       </div>
+
+      <div className="contacts-pagination">
+        <span>Mostrando {fromItem} a {toItem} de {filteredUsers.length} contatos</span>
+        <div>
+          <button className="icon-button" type="button" aria-label="Página anterior" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
+            <ChevronLeft size={20} />
+          </button>
+          <button className="orders-page-number" type="button">{currentPage}</button>
+          <button className="icon-button" type="button" aria-label="Próxima página" disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
+            <ChevronRight size={20} />
+          </button>
+        </div>
+      </div>
+
       {selectedUser ? (
         <UserProfileDrawer
           user={selectedUser}
@@ -5300,7 +5747,6 @@ function UsersView({
     </section>
   );
 }
-
 function UserProfileDrawer({
   user,
   draft,
@@ -5429,7 +5875,11 @@ function UserProfileDrawer({
                   const input = event.currentTarget;
                   const file = event.target.files?.[0];
                   if (!file) return;
-                  const uploaded = await onUploadFile(file, "users");
+                  const uploaded = await safeUploadFile(onUploadFile, file, "users");
+                  if (!uploaded) {
+                    input.value = "";
+                    return;
+                  }
                   onDraftChange({ avatarUrl: uploaded.url });
                   input.value = "";
                 }}
@@ -5664,11 +6114,24 @@ function ProductsView({
   onEditProduct: (productId: string) => void;
   onDeleteProduct: (productId: string) => void | Promise<void>;
 }) {
+  const [productSearch, setProductSearch] = useState("");
+  const filteredProducts = products.filter((product) => productMatchesQuery(product, productSearch));
+  const averagePrice = products.length
+    ? products.reduce((sum, product) => sum + product.price, 0) / products.length
+    : 0;
+  const totalStock = products.reduce((sum, product) => sum + (product.stockQty ?? 0), 0);
+  const categoryCount = new Set(products.map((product) => product.category).filter(Boolean)).size;
+  const productCountLabel = `${formatNumber(products.length)} ${products.length === 1 ? "produto" : "produtos"}`;
+  const filteredProductNoun = filteredProducts.length === 1 ? "produto" : "produtos";
+
   return (
-    <section className="table-card">
-      <div className="table-toolbar">
+    <section className="table-card products-reference-page">
+      <div className="products-reference-header">
+        <span className="products-reference-icon">
+          <Package size={34} />
+        </span>
         <div>
-          <strong>{products.length} produtos</strong>
+          <strong>{productCountLabel}</strong>
           <span>Catálogo operacional da gráfica</span>
         </div>
         <button className="primary-button" type="button" onClick={onCreateProduct}>
@@ -5676,111 +6139,331 @@ function ProductsView({
           Novo Produto
         </button>
       </div>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Produto</th>
-              <th>Categoria</th>
-              <th>Setor</th>
-              <th>Preço</th>
-              <th>Mínimo</th>
-              <th>Frações</th>
-              <th>Estoque</th>
-              <th>NF-e</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {products.map((product) => {
-              const ready = productFiscalReady(product);
 
-              return (
-                <tr key={product.id}>
-                  <td>
-                    <strong>{product.name}</strong>
-                    <small>{product.sku ?? product.id}</small>
-                  </td>
-                  <td>{product.category}</td>
-                  <td>{product.sector}</td>
-                  <td>{formatCurrency(product.price)}</td>
-                  <td>{formatNumber(product.minOrderQty)}</td>
-                  <td>{product.allowsFractions ? `${formatNumber(product.minFractionQty)}+` : "Não"}</td>
-                  <td>{product.stockItem}</td>
-                  <td>{ready ? <SuccessTag label="Apto" /> : <DangerTag label="Pendente" />}</td>
-                  <td>
-                    <div className="row-actions">
-                      <button
-                        className="icon-button"
-                        type="button"
-                        aria-label={`Editar ${product.name}`}
-                        title="Editar produto"
-                        onClick={() => onEditProduct(product.id)}
+      <div className="products-summary-grid">
+        <OrderMetricCard
+          icon={Package}
+          title="Total de produtos"
+          value={formatNumber(products.length)}
+          detail="cadastrados"
+          tone="#6b45ff"
+        />
+        <OrderMetricCard
+          icon={Tag}
+          title="Valor médio"
+          value={formatCurrency(averagePrice)}
+          detail="por produto"
+          tone="#18a957"
+        />
+        <OrderMetricCard
+          icon={Layers3}
+          title="Estoque total"
+          value={formatNumber(totalStock)}
+          detail="unidades"
+          tone="#236dff"
+        />
+        <OrderMetricCard
+          icon={ChartNoAxesColumn}
+          title="Categorias"
+          value={formatNumber(categoryCount)}
+          detail="ativas"
+          tone="#ff7208"
+        />
+      </div>
+
+      <section className="products-table-card">
+        <div className="products-table-toolbar">
+          <label className="products-search">
+            <Search size={18} />
+            <input
+              type="search"
+              placeholder="Buscar produto..."
+              value={productSearch}
+              onChange={(event) => setProductSearch(event.target.value)}
+            />
+          </label>
+
+          <div className="orders-toolbar-actions">
+            <button className="ghost-button" type="button">
+              <Funnel size={17} />
+              Filtros
+            </button>
+            <button className="ghost-button" type="button">
+              <Download size={17} />
+              Exportar
+            </button>
+          </div>
+        </div>
+
+        <div className="products-table-scroll w-full overflow-x-auto">
+          <table className="products-table">
+            <thead>
+              <tr>
+                <th>
+                  <span className="sortable-heading">
+                    Produto
+                    <ChevronDown size={13} />
+                  </span>
+                </th>
+                <th>Categoria</th>
+                <th>Setor</th>
+                <th>Preço</th>
+                <th>Mínimo</th>
+                <th>Fração</th>
+                <th>Estoque</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredProducts.map((product) => {
+                const productPhoto = product.thumbnailUrl || quoteProductImage(product);
+                const stockLabel = product.stockItem || product.name;
+                const isAvailable = product.active && !product.saleBlocked;
+
+                return (
+                  <tr key={product.id}>
+                    <td>
+                      <div className="product-name-cell">
+                        <span
+                          className="product-table-thumb"
+                          style={{ backgroundImage: `url(${productPhoto})` }}
+                          aria-hidden="true"
+                        />
+                        <div>
+                          <strong>{product.name}</strong>
+                          <small>Código interno: {product.sku ?? product.id}</small>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span
+                        className="product-chip category"
+                        style={{ "--chip-tone": visualColor(product.category) } as CSSProperties}
                       >
-                        <Pencil size={16} />
-                      </button>
-                      <button
-                        className="icon-button danger-action"
-                        type="button"
-                        aria-label={`Remover ${product.name}`}
-                        title="Remover produto"
-                        onClick={() => void onDeleteProduct(product.id)}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                        {product.category}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="product-chip sector">{product.sector || "Sem setor"}</span>
+                    </td>
+                    <td>{formatCurrency(product.price)}</td>
+                    <td>{formatNumber(product.minOrderQty)}</td>
+                    <td className={product.allowsFractions ? "product-fraction-yes" : undefined}>
+                      {product.allowsFractions ? `${formatNumber(product.minFractionQty)}+` : "Não"}
+                    </td>
+                    <td>
+                      <div className={isAvailable ? "product-stock-cell" : "product-stock-cell unavailable"}>
+                        <span>{stockLabel}</span>
+                        <small>
+                          <i aria-hidden="true" />
+                          {isAvailable ? "Disponível" : "Indisponível"}
+                        </small>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="row-actions product-row-actions">
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label={`Editar ${product.name}`}
+                          title="Editar produto"
+                          onClick={() => onEditProduct(product.id)}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          className="icon-button danger-action"
+                          type="button"
+                          aria-label={`Remover ${product.name}`}
+                          title="Remover produto"
+                          onClick={() => void onDeleteProduct(product.id)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                        <button
+                          className="icon-button ghost-dots"
+                          type="button"
+                          aria-label={`Mais ações de ${product.name}`}
+                          title="Mais ações"
+                        >
+                          <MoreVertical size={17} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="orders-pagination">
+          <span>
+            Mostrando {filteredProducts.length ? 1 : 0} a {filteredProducts.length} de {filteredProducts.length} {filteredProductNoun}
+          </span>
+          <div>
+            <button className="icon-button" type="button" aria-label="Página anterior" disabled>
+              <ChevronLeft size={17} />
+            </button>
+            <button className="orders-page-number" type="button">1</button>
+            <button className="icon-button" type="button" aria-label="Próxima página" disabled>
+              <ChevronRight size={17} />
+            </button>
+          </div>
+        </div>
+      </section>
+    </section>
+  );
+}
+function CatalogView({
+  products,
+  onSelectProduct,
+  onManageCategories,
+}: {
+  products: Product[];
+  onSelectProduct: (productId: string) => void;
+  onManageCategories: () => void;
+}) {
+  const activeProducts = products.filter((product) => product.active && !product.saleBlocked);
+  const averagePrice = activeProducts.length
+    ? activeProducts.reduce((sum, product) => sum + product.price, 0) / activeProducts.length
+    : 0;
+  const categoryCount = new Set(products.map((product) => product.category).filter(Boolean)).size;
+  const totalStock = products.reduce((sum, product) => sum + (product.stockQty ?? 0), 0);
+
+  return (
+    <section className="catalog-reference-page">
+      <div className="catalog-summary-band">
+        <CatalogMetric
+          icon={Package}
+          label="Total de produtos"
+          value={formatNumber(activeProducts.length)}
+          detail="Ativos no catálogo"
+          tone="#6b45ff"
+        />
+        <CatalogMetric
+          icon={Tag}
+          label="Preço médio"
+          value={formatCurrency(averagePrice)}
+          detail="Entre todos os produtos"
+          tone="#18a957"
+        />
+        <CatalogMetric
+          icon={Package}
+          label="Categorias"
+          value={formatNumber(categoryCount)}
+          detail="Categorizadas"
+          tone="#ff7208"
+        />
+        <CatalogMetric
+          icon={Layers3}
+          label="Estoque total"
+          value={formatNumber(totalStock)}
+          detail="Unidades disponíveis"
+          tone="#236dff"
+        />
+      </div>
+
+      <div className="catalog-product-grid">
+        {products.map((product) => {
+          const productPhoto = product.thumbnailUrl || quoteProductImage(product);
+          const stockQuantity = product.stockQty ?? product.minFractionQty ?? product.minOrderQty;
+          const lowStockThreshold = Math.max(product.stockMin ?? 0, product.minOrderQty ?? 0);
+          const isLowStock = product.active && !product.saleBlocked && stockQuantity <= lowStockThreshold;
+          const isAvailable = product.active && !product.saleBlocked && stockQuantity > 0;
+          const stockBadgeClass = isLowStock
+            ? "catalog-stock-badge low"
+            : isAvailable
+              ? "catalog-stock-badge"
+              : "catalog-stock-badge unavailable";
+          const stockText = product.allowsFractions
+            ? `${formatNumber(product.minFractionQty)}+ un`
+            : `${formatNumber(stockQuantity)} un`;
+
+          return (
+            <article className="catalog-product-card" key={product.id}>
+              <div
+                className="catalog-product-image"
+                style={{ backgroundImage: `url(${productPhoto})` }}
+              >
+                <span className={stockBadgeClass}>
+                  {isLowStock ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+                  {isLowStock ? "Estoque baixo" : isAvailable ? "Em estoque" : "Indisponível"}
+                </span>
+              </div>
+
+              <h3>{product.name}</h3>
+              <p>{product.category} · {product.sector || "Sem setor"}</p>
+
+              <div className="catalog-product-metrics">
+                <span>
+                  <i className="purple">
+                    <Package size={18} />
+                  </i>
+                  <small>Preço</small>
+                  <strong>{formatCurrency(product.price)}</strong>
+                </span>
+                <span>
+                  <i className={isLowStock ? "orange" : "blue"}>
+                    <Layers3 size={18} />
+                  </i>
+                  <small>Estoque</small>
+                  <strong>{stockText}</strong>
+                </span>
+              </div>
+
+              <button className="primary-button wide" type="button" onClick={() => onSelectProduct(product.id)}>
+                <ShoppingBag size={18} />
+                Montar Pedido
+              </button>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="catalog-tip">
+        <span>
+          <Lightbulb size={30} />
+        </span>
+        <div>
+          <strong>Dica</strong>
+          <p>Mantenha seu catálogo atualizado para facilitar e agilizar a montagem dos pedidos.</p>
+        </div>
+        <button className="ghost-button" type="button" onClick={onManageCategories}>
+          <LayoutGrid size={18} />
+          Gerenciar categorias
+        </button>
       </div>
     </section>
   );
 }
 
-function CatalogView({
-  products,
-  onSelectProduct,
+function CatalogMetric({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone,
 }: {
-  products: Product[];
-  onSelectProduct: (productId: string) => void;
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  detail: string;
+  tone: string;
 }) {
   return (
-    <section className="catalog-grid">
-      {products.map((product) => {
-        const productPhoto = product.thumbnailUrl || quoteProductImage(product);
-
-        return (
-          <article className="catalog-card" key={product.id}>
-          <div
-            className="product-visual product-photo"
-            style={
-              {
-                "--visual": visualColor(product.category),
-                backgroundImage: `linear-gradient(180deg, rgba(11, 16, 32, 0.02), rgba(11, 16, 32, 0.08)), url(${productPhoto})`,
-              } as CSSProperties
-            }
-          />
-          <h3>{product.name}</h3>
-          <p>{product.category} · {product.sector}</p>
-          <div className="catalog-meta">
-            <span>{formatCurrency(product.price)}</span>
-            <span>{product.leadTime}</span>
-            <span>{product.allowsFractions ? "Fraciona" : "Sem frações"}</span>
-          </div>
-          <button className="primary-button wide" type="button" onClick={() => onSelectProduct(product.id)}>
-            <ShoppingBag size={18} />
-            Montar Pedido
-          </button>
-        </article>
-        );
-      })}
-    </section>
+    <article className="catalog-summary-item" style={{ "--catalog-tone": tone } as CSSProperties}>
+      <span>
+        <Icon size={28} />
+      </span>
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+        <em>{detail}</em>
+      </div>
+    </article>
   );
 }
-
 function InventoryView({
   inventory,
   onUploadFile,
@@ -5914,7 +6597,11 @@ function InventoryView({
                       const input = event.currentTarget;
                       const file = event.target.files?.[0];
                       if (!file) return;
-                      const uploaded = await onUploadFile(file, "inventory");
+                      const uploaded = await safeUploadFile(onUploadFile, file, "inventory");
+                      if (!uploaded) {
+                        input.value = "";
+                        return;
+                      }
                       updateDraft(item, { imageUrl: uploaded.url });
                       input.value = "";
                     }}
@@ -6522,7 +7209,153 @@ function SectorsView({
   );
 }
 
+function quoteTotal(quote: Quote) {
+  return quote.items.reduce((sum, item) => sum + item.total, 0);
+}
+
+function publicQuoteLink(quote: Quote) {
+  if (!quote.publicToken || typeof window === "undefined") return "";
+
+  let quoteId = quote.publicQuoteId ?? quote.id;
+  let token = quote.publicToken;
+
+  if (quote.publicToken.startsWith("http")) {
+    try {
+      const publicUrl = new URL(quote.publicToken);
+      token = publicUrl.searchParams.get("token") ?? "";
+      const [, routeQuoteId] = publicUrl.pathname.match(/\/orcamentos?\/([^/?#]+)/) ?? [];
+      quoteId = routeQuoteId ? decodeURIComponent(routeQuoteId) : quoteId;
+    } catch {
+      token = "";
+    }
+  }
+
+  if (!token) return "";
+  return `${window.location.origin}/orcamentos/${encodeURIComponent(quoteId)}?token=${encodeURIComponent(token)}`;
+}
+
 function QuotesView({
+  quotes,
+  onCreateQuote,
+}: {
+  quotes: Quote[];
+  onCreateQuote: () => void;
+}) {
+  const quotesPageSize = 10;
+  const [quotePage, setQuotePage] = useState(1);
+  const totalQuotePages = Math.max(1, Math.ceil(quotes.length / quotesPageSize));
+  const currentQuotePage = Math.min(quotePage, totalQuotePages);
+  const quotePageStart = (currentQuotePage - 1) * quotesPageSize;
+  const paginatedQuotes = quotes.slice(quotePageStart, quotePageStart + quotesPageSize);
+  const visibleQuoteStart = quotes.length ? quotePageStart + 1 : 0;
+  const visibleQuoteEnd = Math.min(quotePageStart + paginatedQuotes.length, quotes.length);
+
+  return (
+    <section className="quote-page">
+      <div className="quote-header">
+        <div className="quote-title">
+          <span>
+            <FileText size={25} />
+          </span>
+          <div>
+            <h1>Orçamentos</h1>
+            <p>Consulte propostas salvas, links públicos e valores enviados aos clientes.</p>
+          </div>
+        </div>
+        <div className="quote-header-actions">
+          <button className="primary-button" type="button" onClick={onCreateQuote}>
+            <Plus size={18} />
+            Novo Orçamento
+          </button>
+        </div>
+      </div>
+
+      <section className="quote-created-list" aria-label="Orcamentos criados">
+        <div className="quote-created-head">
+          <div>
+            <h2>Orçamentos criados</h2>
+            <p>
+              {quotes.length
+                ? `${quotes.length} registros salvos • exibindo ${visibleQuoteStart}-${visibleQuoteEnd}`
+                : "Nenhum orçamento criado ainda"}
+            </p>
+          </div>
+        </div>
+
+        {quotes.length ? (
+          <>
+            <div className="quote-created-table">
+              {paginatedQuotes.map((quote) => {
+                const publicLink = publicQuoteLink(quote);
+
+                return (
+                  <article className="quote-created-row" key={quote.id}>
+                    <div>
+                      <strong>{quote.id}</strong>
+                      <span>{quote.customerName}</span>
+                    </div>
+                    <span>{formatDateShort(quote.validUntil)}</span>
+                    <span className={`quote-created-status ${normalizeText(quote.status)}`}>{quote.status}</span>
+                    <strong>{formatCurrency(quoteTotal(quote))}</strong>
+                    <div className="quote-created-actions">
+                      {publicLink ? (
+                        <>
+                          <a className="ghost-button" href={publicLink} target="_blank" rel="noreferrer">
+                            Abrir
+                          </a>
+                          <button
+                            className="icon-button"
+                            type="button"
+                            title="Copiar link público"
+                            onClick={() => void navigator.clipboard?.writeText(publicLink)}
+                          >
+                            <Link2 size={16} />
+                          </button>
+                        </>
+                      ) : (
+                        <span>Sem link</span>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <div className="quote-created-pagination" aria-label="Paginação de orçamentos">
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setQuotePage(Math.max(1, currentQuotePage - 1))}
+                disabled={currentQuotePage === 1}
+              >
+                <ChevronLeft size={17} />
+                Anterior
+              </button>
+              <span>
+                Página {currentQuotePage} de {totalQuotePages}
+              </span>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setQuotePage(Math.min(totalQuotePages, currentQuotePage + 1))}
+                disabled={currentQuotePage === totalQuotePages}
+              >
+                Próxima
+                <ChevronRight size={17} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="quote-created-empty">
+            Clique em Novo Orçamento para criar a primeira proposta.
+          </div>
+        )}
+      </section>
+    </section>
+  );
+}
+
+function QuoteEditor({
   draft,
   quotes,
   clients,
@@ -6622,25 +7455,15 @@ function QuotesView({
     onDraftChange({ ...draft, items: draft.items.filter((item) => item.id !== itemId) });
   }
 
-  function publicQuoteLink(quote: Quote) {
-    if (quote.publicToken.startsWith("http")) return quote.publicToken;
-    if (!quote.publicToken) return "";
-    return `${window.location.origin}/orcamento/${quote.id}?token=${encodeURIComponent(quote.publicToken)}`;
-  }
-
   return (
-    <section className="quote-page">
-      <div className="quote-header">
-        <div className="quote-title">
-          <span>
-            <FileText size={25} />
-          </span>
-          <div>
-            <h1>Novo Orçamento</h1>
-            <p>Monte propostas, gere PDF e envie link público para aceite.</p>
-          </div>
-        </div>
-        <div className="quote-header-actions">
+    <section className="quote-editor">
+      <ModalHeader
+        icon={FileText}
+        title="Novo Orçamento"
+        subtitle="Monte propostas, gere PDF e envie link público para aceite."
+      />
+
+      <div className="quote-editor-toolbar">
           <button className="ghost-button" type="button" onClick={onSaveDraft}>
             <Save size={18} />
             Salvar rascunho
@@ -6652,7 +7475,6 @@ function QuotesView({
           <button className="icon-button quote-menu-button" type="button" aria-label="Mais ações" title="Mais ações">
             <MoreVertical size={20} />
           </button>
-        </div>
       </div>
 
       <div className="quote-layout">
@@ -6708,7 +7530,7 @@ function QuotesView({
               <div className="quote-form-grid three">
                 <label>
                   Número
-                  <input value="#1001" readOnly />
+                  <input value="Gerado ao salvar" readOnly />
                 </label>
                 <label>
                   Data
@@ -7048,11 +7870,25 @@ function QuoteSummaryLine({ label, value }: { label: string; value: string }) {
 
 function quoteProductImage(product?: Product): string {
   if (!product) return "/assets/category-folders.jpg";
+  const lookup = normalizeText(`${product.name} ${product.category} ${product.stockItem}`);
   if (product.id === "prod-cartoes") return "/assets/category-business-cards.jpg";
   if (product.id === "prod-banners") return "/assets/category-banners.jpg";
-  if (product.id === "prod-adesivos") return "/assets/category-folders.jpg";
+  if (product.id === "prod-adesivos") return "/assets/category-stickers.jpg";
   if (product.id === "prod-canetas") return "/assets/category-mugs.jpg";
+  if (lookup.includes("adesivo") || lookup.includes("sticker")) return "/assets/category-stickers.jpg";
+  if (lookup.includes("cartao")) return "/assets/category-business-cards.jpg";
+  if (lookup.includes("banner") || lookup.includes("lona")) return "/assets/category-banners.jpg";
+  if (lookup.includes("folder") || lookup.includes("panfleto")) return "/assets/category-folders.jpg";
   return inventoryImages[product.stockItem] ?? "/assets/category-packages.jpg";
+}
+
+function productDisplayImage(product?: Product): string {
+  const thumbnail = product?.thumbnailUrl?.trim();
+  if (thumbnail && !thumbnail.includes("images.unsplash.com")) {
+    return thumbnail;
+  }
+
+  return quoteProductImage(product);
 }
 
 function quoteItemDescription(productName: string): string[] {
@@ -7088,9 +7924,9 @@ function parseDateInput(value: string): string {
 
 function FinanceView({
   finance,
-  onCreateExpense,
-  onScheduleCharge,
-  onSendReminder,
+  onCreateExpense: _onCreateExpense,
+  onScheduleCharge: _onScheduleCharge,
+  onSendReminder: _onSendReminder,
 }: {
   finance: FinanceEntry[];
   onCreateExpense: () => void;
@@ -7103,22 +7939,29 @@ function FinanceView({
   const payable = finance
     .filter((entry) => entry.type === "payable")
     .reduce((sum, entry) => sum + entry.value, 0);
-  const profit = finance.find((entry) => entry.type === "profit")?.value ?? 0;
-  const margin = finance.find((entry) => entry.type === "margin")?.value ?? 0;
   const cash = finance.find((entry) => entry.type === "cash")?.value ?? 0;
+  const projectedCash = cash + receivable - payable;
+  const cashflowDelta = projectedCash - cash;
+  const projected7Days = cash + cashflowDelta * 0.19445;
+  const projected15Days = cash + cashflowDelta * 0.54518;
   const balance = receivable - payable;
-  const projectedCash = cash + balance;
+  const margin = finance.find((entry) => entry.type === "margin")?.value ?? 0;
+  const profit = finance.find((entry) => entry.type === "profit")?.value ?? 0;
+  const projectionPoints = [
+    { label: "Hoje", days: 0, value: cash, tone: "#5b45ff" },
+    { label: "7 dias", days: 7, value: projected7Days, tone: "#0a84ff" },
+    { label: "15 dias", days: 15, value: projected15Days, tone: "#ff7a00" },
+    { label: "30 dias", days: 30, value: projectedCash, tone: projectedCash < 0 ? "#ee3045" : "#16b981" },
+  ];
   const financeReport = [
+    "Periodo;Data;Valor",
+    ...projectionPoints.map((item) => `${item.label};${financeProjectionDate(item.days)};${formatCurrency(item.value)}`),
+    "",
     "Conta;Tipo;Valor;Status;Vencimento",
     ...finance.map((entry) => `${entry.label};${entry.type};${entry.type === "margin" ? `${entry.value}%` : formatCurrency(entry.value)};${entry.status};${entry.due}`),
     `Saldo projetado;cash;${formatCurrency(projectedCash)};Projetado;30 dias`,
   ].join("\n");
-  const forecastItems = [
-    { label: "Hoje", value: cash, tone: "#5b45ff" },
-    { label: "7 dias", value: cash + receivable * 0.35 - payable * 0.2, tone: "#0a84ff" },
-    { label: "15 dias", value: cash + receivable * 0.68 - payable * 0.55, tone: "#ff7a00" },
-    { label: "30 dias", value: projectedCash, tone: projectedCash >= 0 ? "#16b981" : "#ee3045" },
-  ];
+  const forecastItems = projectionPoints.map((item) => ({ label: item.label, value: item.value, tone: item.tone }));
   const cashFlowSeries = chartSeries(forecastItems.map((item) => item.value));
   const breakdown = [
     { label: "Receber", value: receivable, percent: 100, color: "#16b981" },
@@ -7126,6 +7969,55 @@ function FinanceView({
     { label: "Lucro", value: profit, percent: Math.round((profit / Math.max(receivable, 1)) * 100), color: "#5b45ff" },
     { label: "Caixa", value: cash, percent: Math.round((cash / Math.max(receivable, 1)) * 100), color: "#0a84ff" },
   ];
+  const onCreateExpense = _onCreateExpense;
+  const onScheduleCharge = _onScheduleCharge;
+  const onSendReminder = _onSendReminder;
+
+  return (
+    <section className="finance-page">
+      <section className="cashflow-reference-card">
+        <div className="cashflow-reference-head">
+          <div className="cashflow-reference-title">
+            <span>
+              <CircleDollarSign size={30} />
+            </span>
+            <strong>Fluxo de Caixa</strong>
+          </div>
+          <button className="cashflow-export-button" type="button" onClick={() => downloadReportFile("financeiro-fluxo-caixa.csv", financeReport)}>
+            <Download size={20} />
+            Exportar
+            <ChevronDown size={18} />
+          </button>
+        </div>
+
+        <div className="cashflow-reference-balance">
+          <span>
+            Saldo projetado em 30 dias
+            <Info size={18} />
+          </span>
+          <strong className={projectedCash < 0 ? "negative" : "positive"}>{formatCurrency(projectedCash)}</strong>
+          <p>Projeção considerando recebíveis e contas a pagar</p>
+        </div>
+
+        <FinanceCashflowChart points={projectionPoints} />
+
+        <div className="cashflow-period-grid">
+          {projectionPoints.map((item, index) => (
+            <FinanceProjectionCard
+              item={item}
+              previousValue={projectionPoints[index - 1]?.value}
+              key={item.label}
+            />
+          ))}
+        </div>
+
+        <p className="cashflow-reference-note">
+          <Info size={17} />
+          Os valores são projeções e podem sofrer alterações.
+        </p>
+      </section>
+    </section>
+  );
 
   return (
     <section className="finance-page">
@@ -7250,6 +8142,176 @@ function FinanceView({
         </SectionCard>
       </section>
     </section>
+  );
+}
+
+function financeProjectionDate(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(date);
+}
+
+function financeCurrencyClass(value: number): "positive" | "negative" {
+  return value < 0 ? "negative" : "positive";
+}
+
+function FinanceCashflowChart({
+  points,
+}: {
+  points: Array<{ label: string; days: number; value: number; tone: string }>;
+}) {
+  const width = 1180;
+  const height = 270;
+  const chartLeft = 74;
+  const chartRight = 34;
+  const chartTop = 30;
+  const chartBottom = 54;
+  const chartWidth = width - chartLeft - chartRight;
+  const chartHeight = height - chartTop - chartBottom;
+  const values = points.map((point) => point.value);
+  const minValue = Math.min(-15000, ...values);
+  const maxValue = Math.max(5000, ...values);
+  const yForValue = (value: number) => chartTop + ((maxValue - value) / Math.max(maxValue - minValue, 1)) * chartHeight;
+  const xForIndex = (index: number) => chartLeft + (chartWidth / Math.max(points.length - 1, 1)) * index;
+  const linePoints = points.map((point, index) => `${xForIndex(index)},${yForValue(point.value)}`).join(" ");
+  const zeroY = yForValue(0);
+  const areaPoints = `${chartLeft},${zeroY} ${linePoints} ${chartLeft + chartWidth},${zeroY}`;
+  const useReferenceTicks = maxValue <= 5000 && minValue >= -15000;
+  const ticks = useReferenceTicks
+    ? [-15000, -10000, -5000, 0, 5000]
+    : financeDynamicTicks(minValue, maxValue);
+
+  return (
+    <svg className="cashflow-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Projeção do fluxo de caixa">
+      <defs>
+        <linearGradient id="cashflow-area-positive" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#16b981" stopOpacity="0.18" />
+          <stop offset="1" stopColor="#16b981" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="cashflow-area-negative" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ee3045" stopOpacity="0.18" />
+          <stop offset="1" stopColor="#ee3045" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="cashflow-line-gradient" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="#16b981" />
+          <stop offset="0.44" stopColor="#16b981" />
+          <stop offset="0.64" stopColor="#ff7a00" />
+          <stop offset="1" stopColor="#ee3045" />
+        </linearGradient>
+        <clipPath id="cashflow-positive-clip">
+          <rect x={chartLeft} y={chartTop} width={chartWidth} height={Math.max(zeroY - chartTop, 0)} />
+        </clipPath>
+        <clipPath id="cashflow-negative-clip">
+          <rect x={chartLeft} y={zeroY} width={chartWidth} height={Math.max(chartTop + chartHeight - zeroY, 0)} />
+        </clipPath>
+      </defs>
+      <line className="cashflow-zero-line" x1={chartLeft} x2={chartLeft + chartWidth} y1={zeroY} y2={zeroY} />
+      {ticks.map((tick) => (
+        <g key={tick}>
+          {tick !== 0 ? <line className="cashflow-grid-line" x1={chartLeft} x2={chartLeft + chartWidth} y1={yForValue(tick)} y2={yForValue(tick)} /> : null}
+          <text className="cashflow-axis-label" x={chartLeft - 18} y={yForValue(tick) + 5} textAnchor="end">
+            {financeAxisLabel(tick)}
+          </text>
+        </g>
+      ))}
+      <polygon className="cashflow-area-positive" clipPath="url(#cashflow-positive-clip)" points={areaPoints} />
+      <polygon className="cashflow-area-negative" clipPath="url(#cashflow-negative-clip)" points={areaPoints} />
+      <polyline className="cashflow-main-line" points={linePoints} />
+      {points.map((point, index) => {
+        const x = xForIndex(index);
+        const y = yForValue(point.value);
+        return (
+          <g key={point.label}>
+            <circle className={`cashflow-point ${financeCurrencyClass(point.value)}`} cx={x} cy={y} r="5.8" />
+            <foreignObject x={index === 0 ? x + 10 : index === points.length - 1 ? x - 102 : x + 9} y={y - 36} width="118" height="30">
+              <div className={`cashflow-value-label ${financeCurrencyClass(point.value)}`}>{formatCurrency(point.value)}</div>
+            </foreignObject>
+            <text className="cashflow-x-label" x={x} y={height - 28} textAnchor="middle">{point.label}</text>
+            <text className="cashflow-x-date" x={x} y={height - 12} textAnchor="middle">{financeProjectionDate(point.days)}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function financeAxisLabel(value: number): string {
+  if (value === 0) return "R$ 0";
+  const abs = Math.abs(value) / 1000;
+  return `${value < 0 ? "-" : ""}R$ ${formatNumber(abs)} mil`;
+}
+
+function financeDynamicTicks(minValue: number, maxValue: number): number[] {
+  const range = Math.max(maxValue - minValue, 1);
+  const roughStep = range / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+  const niceStep = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
+  const start = Math.floor(minValue / niceStep) * niceStep;
+  const ticks: number[] = [];
+
+  for (let value = start; value <= maxValue + niceStep; value += niceStep) {
+    ticks.push(value);
+  }
+
+  if (!ticks.includes(0)) {
+    ticks.push(0);
+  }
+
+  return ticks.sort((a, b) => a - b).slice(-6);
+}
+
+function FinanceProjectionCard({
+  item,
+  previousValue,
+}: {
+  item: { label: string; days: number; value: number; tone: string };
+  previousValue?: number;
+}) {
+  const isNegative = item.value < 0;
+  const base = Math.abs(previousValue ?? item.value);
+  const dropPercent = previousValue === undefined || base === 0
+    ? null
+    : Math.abs(((item.value - previousValue) / base) * 100);
+  const trendLabel = dropPercent === null
+    ? item.value >= 0 ? "Positivo" : "Negativo"
+    : `Queda de ${formatNumber(Number(dropPercent.toFixed(1)))}%`;
+
+  return (
+    <article className={`cashflow-period-card ${financeCurrencyClass(item.value)}`} style={{ "--period-tone": item.tone } as CSSProperties}>
+      <div className="cashflow-period-head">
+        <span>
+          <CalendarDays size={22} />
+        </span>
+        <strong>{item.label}</strong>
+      </div>
+      <b>{formatCurrency(item.value)}</b>
+      <MiniCashflowSparkline color={item.tone} negative={isNegative} />
+      <div className="cashflow-period-foot">
+        <em>{trendLabel}</em>
+        {dropPercent !== null ? <ChevronDown size={19} /> : null}
+      </div>
+    </article>
+  );
+}
+
+function MiniCashflowSparkline({ color, negative }: { color: string; negative: boolean }) {
+  const points = negative
+    ? "0,28 16,24 32,26 48,22 64,25 80,23 96,27 112,29 128,31 144,34 160,33 176,36 192,35 214,42"
+    : "0,36 16,30 32,26 48,27 64,24 80,25 96,23 112,25 128,24 144,28 160,29 176,31 192,30 214,37";
+  const gradientId = `mini-${color.replace(/[^a-z0-9]/gi, "")}-${negative ? "neg" : "pos"}`;
+
+  return (
+    <svg className="cashflow-mini-chart" viewBox="0 0 214 54" role="img" aria-label="Tendência do período">
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={color} stopOpacity="0.18" />
+          <stop offset="1" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={`0,54 ${points} 214,54`} fill={`url(#${gradientId})`} />
+      <polyline fill="none" stroke={color} strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" points={points} />
+    </svg>
   );
 }
 
@@ -7574,7 +8636,11 @@ function FilesView({
                       const input = event.currentTarget;
                       const selected = event.target.files?.[0];
                       if (!selected) return;
-                      const uploaded = await onUploadFile(selected, "files");
+                      const uploaded = await safeUploadFile(onUploadFile, selected, "files");
+                      if (!uploaded) {
+                        input.value = "";
+                        return;
+                      }
                       setDrafts((current) => ({
                         ...current,
                         [file.id]: {
@@ -7681,79 +8747,309 @@ function SettingsView({
   onToggleTheme: () => void;
   onRefreshData: () => void;
 }) {
+  const [settingsValues, setSettingsValues] = useState<Record<string, string>>({
+    tenant: "GraphFlow Matriz",
+    profile: "Administrador",
+    unit: "São Paulo",
+    mfa: "Obrigatório",
+    criticalAlerts: "Ativos",
+    audit: "30 dias",
+    provider: "Keycloak OIDC",
+    session: "Cookie httpOnly + SameSite",
+    permissions: "Por usuário e setor",
+    kanban: "Sincronizado com setores",
+    machines: "Uso por pedidos",
+    inventory: "Mínimos, imagens e movimentações",
+    quotes: "PDF, link público e aceite",
+    publicLinks: "Token com expiração",
+    notifications: "Painel interno",
+  });
+  const [activeSetting, setActiveSetting] = useState<SettingsItemConfig | null>(null);
+  const [editingValue, setEditingValue] = useState("");
+  const [settingsFeedback, setSettingsFeedback] = useState("");
+
+  const settingCards: SettingsCardConfig[] = [
+    {
+      title: "Conta",
+      subtitle: "Informações básicas da sua conta",
+      icon: Users,
+      tone: "#6b45ff",
+      rows: [
+        { key: "tenant", icon: Building2, label: "Tenant", value: settingsValues.tenant, options: ["GraphFlow Matriz", "GraphFlow Unidade 02", "GraphFlow Franquia"] },
+        { key: "profile", icon: Users, label: "Perfil", value: settingsValues.profile, options: ["Administrador", "Gerente", "Operador", "Cliente"] },
+        { key: "unit", icon: MapPin, label: "Unidade", value: settingsValues.unit, options: ["São Paulo", "Rio de Janeiro", "Belo Horizonte", "Curitiba"] },
+      ],
+    },
+    {
+      title: "Segurança",
+      subtitle: "Proteja sua conta e dados",
+      icon: ShieldCheck,
+      tone: "#16b981",
+      rows: [
+        { key: "mfa", icon: LockKeyhole, label: "MFA TOTP", value: settingsValues.mfa, pill: "success", options: ["Obrigatório", "Opcional", "Desativado"] },
+        { key: "criticalAlerts", icon: BellRing, label: "Alertas críticos", value: settingsValues.criticalAlerts, pill: "success", options: ["Ativos", "Somente e-mail", "Desativados"] },
+        { key: "audit", icon: Eye, label: "Auditoria", value: settingsValues.audit, options: ["7 dias", "30 dias", "90 dias", "180 dias"] },
+      ],
+    },
+    {
+      title: "Preferências",
+      subtitle: "Personalize sua experiência",
+      icon: Settings,
+      tone: "#6b45ff",
+      actions: [
+        {
+          label: "Tema",
+          icon: dark ? Sun : Moon,
+          onClick: () => {
+            onToggleTheme();
+            setSettingsFeedback(`Tema alterado para ${dark ? "claro" : "escuro"}.`);
+          },
+        },
+        {
+          label: "Atualizar dados",
+          icon: RefreshCw,
+          onClick: () => {
+            onRefreshData();
+            setSettingsFeedback("Dados sincronizados com o banco.");
+          },
+        },
+      ],
+    },
+    {
+      title: "Autenticação",
+      subtitle: "Métodos e permissões de acesso",
+      icon: ShieldCheck,
+      tone: "#236dff",
+      rows: [
+        { key: "provider", icon: LockKeyhole, label: "Provedor", value: settingsValues.provider, options: ["Keycloak OIDC", "Supabase Auth", "OIDC customizado"] },
+        { key: "session", icon: ShieldCheck, label: "Sessão", value: settingsValues.session, options: ["Cookie httpOnly + SameSite", "JWT curto + refresh", "Sessão restrita por IP"] },
+        { key: "permissions", icon: UserCog, label: "Permissões", value: settingsValues.permissions, options: ["Por usuário e setor", "Somente por perfil", "Perfil + unidade"] },
+      ],
+    },
+    {
+      title: "Operação",
+      subtitle: "Configurações do dia a dia",
+      icon: Cpu,
+      tone: "#ff9f1c",
+      rows: [
+        { key: "kanban", icon: Factory, label: "Kanban", value: settingsValues.kanban, options: ["Sincronizado com setores", "Manual por estágio", "Por setor e máquina"] },
+        { key: "machines", icon: Settings, label: "Máquinas", value: settingsValues.machines, options: ["Uso por pedidos", "Uso manual", "Uso por ordem de produção"] },
+        { key: "inventory", icon: Boxes, label: "Estoque", value: settingsValues.inventory, options: ["Mínimos, imagens e movimentações", "Somente mínimos", "Lote, validade e movimentações"] },
+      ],
+    },
+    {
+      title: "Comercial",
+      subtitle: "Ferramentas e comunicação",
+      icon: ShoppingBag,
+      tone: "#16b981",
+      rows: [
+        { key: "quotes", icon: FileText, label: "Orçamentos", value: settingsValues.quotes, options: ["PDF, link público e aceite", "Somente PDF", "Link público sem aceite"] },
+        { key: "publicLinks", icon: Link2, label: "Links públicos", value: settingsValues.publicLinks, options: ["Token com expiração", "Token fixo", "Expiração por orçamento"] },
+        { key: "notifications", icon: BellRing, label: "Notificações", value: settingsValues.notifications, options: ["Painel interno", "Painel + WhatsApp", "Painel + e-mail"] },
+      ],
+    },
+  ];
+
+  function openSetting(setting: SettingsItemConfig) {
+    setActiveSetting(setting);
+    setEditingValue(setting.value);
+    setSettingsFeedback("");
+  }
+
+  function saveSetting() {
+    if (!activeSetting) return;
+    setSettingsValues((current) => ({ ...current, [activeSetting.key]: editingValue }));
+    setSettingsFeedback(`${activeSetting.label} atualizado.`);
+    setActiveSetting(null);
+  }
+
   return (
-    <section className="settings-grid">
-      <SectionCard title="Conta">
-        <div className="settings-list">
-          <SettingsLine icon={ShieldCheck} label="Tenant" value="GraphFlow Matriz" />
-          <SettingsLine icon={Users} label="Perfil" value="Administrador" />
-          <SettingsLine icon={Building2} label="Unidade" value="São Paulo" />
-        </div>
-      </SectionCard>
+    <section className="settings-reference-page table-card">
+      <div className="settings-reference-head">
+        <h2>Configurações</h2>
+        <p>Gerencie as preferências e configurações da sua conta.</p>
+      </div>
 
-      <SectionCard title="Segurança">
-        <div className="settings-list">
-          <SettingsLine icon={LockKeyhole} label="MFA TOTP" value="Obrigatório" />
-          <SettingsLine icon={BellRing} label="Alertas críticos" value="Ativos" />
-          <SettingsLine icon={Eye} label="Auditoria" value="30 dias" />
-        </div>
-      </SectionCard>
+      <div className="settings-reference-grid">
+        {settingCards.map((card) => (
+          <SettingsReferenceCard card={card} key={card.title} onOpenSetting={openSetting} />
+        ))}
+      </div>
 
-      <SectionCard title="Preferências">
-        <div className="settings-actions">
-          <button className="ghost-button compact" type="button" onClick={onToggleTheme}>
-            {dark ? <Sun size={16} /> : <Moon size={16} />}
-            Tema
-          </button>
-          <button className="ghost-button compact" type="button" onClick={onRefreshData}>
-            <RefreshCw size={16} />
-            Atualizar dados
-          </button>
+      {settingsFeedback ? (
+        <div className="settings-feedback">
+          <CheckCircle2 size={18} />
+          {settingsFeedback}
         </div>
-      </SectionCard>
+      ) : null}
 
-      <SectionCard title="Autenticação">
-        <div className="settings-list">
-          <SettingsLine icon={LockKeyhole} label="Provedor" value="Keycloak OIDC" />
-          <SettingsLine icon={ShieldCheck} label="Sessão" value="Cookie httpOnly + SameSite" />
-          <SettingsLine icon={UserCog} label="Permissões" value="Por usuário e setor" />
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Operação">
-        <div className="settings-list">
-          <SettingsLine icon={Factory} label="Kanban" value="Sincronizado com setores" />
-          <SettingsLine icon={Cpu} label="Máquinas" value="Uso por pedidos" />
-          <SettingsLine icon={Boxes} label="Estoque" value="Mínimos, imagens e movimentações" />
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Comercial">
-        <div className="settings-list">
-          <SettingsLine icon={FileText} label="Orçamentos" value="PDF, link público e aceite" />
-          <SettingsLine icon={Link2} label="Links públicos" value="Token com expiração" />
-          <SettingsLine icon={MessageCircle} label="Notificações" value="Painel interno" />
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Financeiro e Arquivos">
-        <div className="settings-list">
-          <SettingsLine icon={WalletCards} label="Lançamentos" value="Pagar, receber e custos vinculados" />
-          <SettingsLine icon={Folder} label="Arquivos" value="Anexos por pedido, produto e financeiro" />
-          <SettingsLine icon={Download} label="Exportações" value="CSV e relatórios" />
-        </div>
-      </SectionCard>
+      {activeSetting ? (
+        <SettingsConfigDialog
+          setting={activeSetting}
+          value={editingValue}
+          onChange={setEditingValue}
+          onClose={() => setActiveSetting(null)}
+          onSave={saveSetting}
+        />
+      ) : null}
     </section>
   );
 }
 
+type SettingsItemConfig = {
+  key: string;
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  pill?: "success";
+  options?: string[];
+};
+
+type SettingsActionConfig = {
+  label: string;
+  icon: LucideIcon;
+  onClick: () => void;
+};
+
+type SettingsCardConfig = {
+  title: string;
+  subtitle: string;
+  icon: LucideIcon;
+  tone: string;
+  rows?: SettingsItemConfig[];
+  actions?: SettingsActionConfig[];
+};
+
+function SettingsReferenceCard({
+  card,
+  onOpenSetting,
+}: {
+  card: SettingsCardConfig;
+  onOpenSetting: (setting: SettingsItemConfig) => void;
+}) {
+  const Icon = card.icon;
+
+  return (
+    <article className="settings-reference-card" style={{ "--settings-tone": card.tone } as CSSProperties}>
+      <header>
+        <span>
+          <Icon size={27} />
+        </span>
+        <div>
+          <strong>{card.title}</strong>
+          <em>{card.subtitle}</em>
+        </div>
+      </header>
+
+      {card.actions ? (
+        <div className="settings-reference-actions">
+          {card.actions.map((action) => {
+            const ActionIcon = action.icon;
+            return (
+              <button className="ghost-button" type="button" key={action.label} onClick={action.onClick}>
+                <ActionIcon size={18} />
+                {action.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {card.rows ? (
+        <div className="settings-reference-list">
+          {card.rows.map((row) => (
+            <SettingsReferenceRow row={row} key={row.key} onOpen={() => onOpenSetting(row)} />
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function SettingsReferenceRow({ row, onOpen }: { row: SettingsItemConfig; onOpen: () => void }) {
+  const Icon = row.icon;
+
+  return (
+    <button className="settings-reference-row" type="button" onClick={onOpen}>
+      <Icon size={20} />
+      <span>{row.label}</span>
+      <strong className={row.pill ? "settings-value-pill" : undefined}>{row.value}</strong>
+      <ChevronRight size={19} />
+    </button>
+  );
+}
+
+function SettingsConfigDialog({
+  setting,
+  value,
+  onChange,
+  onClose,
+  onSave,
+}: {
+  setting: SettingsItemConfig;
+  value: string;
+  onChange: (value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  const DialogIcon = setting.icon;
+
+  return (
+    <div className="settings-dialog-backdrop" role="dialog" aria-modal="true" aria-label={`Configurar ${setting.label}`}>
+      <button className="settings-dialog-scrim" type="button" aria-label="Fechar configuração" onClick={onClose} />
+      <form
+        className="settings-dialog"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave();
+        }}
+      >
+        <div className="settings-dialog-head">
+          <span>
+            <DialogIcon size={22} />
+          </span>
+          <div>
+            <h3>{setting.label}</h3>
+            <p>Atualize esta configuração do sistema.</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Fechar" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <label className="settings-dialog-field">
+          Valor
+          {setting.options?.length ? (
+            <select value={value} onChange={(event) => onChange(event.target.value)}>
+              {setting.options.map((option) => (
+                <option value={option} key={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input value={value} onChange={(event) => onChange(event.target.value)} />
+          )}
+        </label>
+
+        <div className="settings-dialog-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="primary-button" type="submit">
+            <Save size={17} />
+            Salvar configuração
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 function OrderForm({
   clients,
   products,
   draft,
-  selectedProduct,
   orderTotal,
-  fractionTotal,
   validation,
   onUploadFile,
   onDraftChange,
@@ -7762,7 +9058,6 @@ function OrderForm({
   clients: Client[];
   products: Product[];
   draft: NewOrderDraft;
-  selectedProduct: Product | undefined;
   orderTotal: number;
   fractionTotal: number;
   validation: string | null;
@@ -7770,208 +9065,527 @@ function OrderForm({
   onDraftChange: (draft: NewOrderDraft) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  function updateFraction(index: number, update: Partial<Fraction>) {
+  const [productSearch, setProductSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [noteItemId, setNoteItemId] = useState<string | null>(null);
+  const [productPickerOpen, setProductPickerOpen] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const draftItems = draft.items ?? [];
+  const selectedItems = draftItems
+    .map((item) => ({
+      item,
+      product: products.find((product) => product.id === item.productId),
+    }))
+    .filter((entry): entry is { item: NewOrderItem; product: Product } => Boolean(entry.product));
+  const categories = Array.from(new Set(products.map((product) => product.category).filter(Boolean)));
+  const filteredProducts = products.filter((product) => {
+    const matchesCategory = categoryFilter === "all" || product.category === categoryFilter;
+    const query = normalizeText(productSearch);
+    const matchesSearch = normalizeText(`${product.name} ${product.sku ?? ""} ${product.category}`).includes(query);
+    return matchesCategory && matchesSearch;
+  });
+  const subtotal = orderTotal;
+  const discount = 0;
+  const freight = 0;
+  const total = subtotal - discount + freight;
+  const firstSelectedItem = selectedItems[0];
+
+  function buildPrimaryFractions(product: Product | undefined, quantity: number) {
+    if (!product?.allowsFractions) {
+      return [];
+    }
+
+    return [
+      {
+        id: "fraction-1",
+        quantity,
+        color: firstProductColor(product),
+        note: "Variação principal",
+      },
+    ];
+  }
+
+  function syncDraft(nextItems: NewOrderItem[], update: Partial<NewOrderDraft> = {}) {
+    const firstItem = nextItems[0];
+    const firstProduct = products.find((product) => product.id === firstItem?.productId);
     onDraftChange({
       ...draft,
-      fractions: draft.fractions.map((fraction, currentIndex) =>
-        currentIndex === index ? { ...fraction, ...update } : fraction,
+      ...update,
+      items: nextItems,
+      productId: firstItem?.productId ?? "",
+      quantity: firstItem?.quantity ?? 0,
+      fractions: firstItem ? buildPrimaryFractions(firstProduct, firstItem.quantity) : [],
+      artFileName: firstItem?.artFileName ?? draft.artFileName,
+      artFileUrl: firstItem?.artFileUrl ?? draft.artFileUrl,
+    });
+  }
+
+  function addOrderItem(productId: string) {
+    const product = products.find((currentProduct) => currentProduct.id === productId);
+    if (!product) {
+      return;
+    }
+
+    const existingItem = draftItems.find((item) => item.productId === productId);
+    if (existingItem) {
+      syncDraft(
+        draftItems.map((item) =>
+          item.id === existingItem.id
+            ? {
+                ...item,
+                quantity: item.quantity + product.minOrderQty,
+              }
+            : item,
+        ),
+      );
+      setProductPickerOpen(false);
+      return;
+    }
+
+    syncDraft([
+      ...draftItems,
+      {
+        id: createClientId("order-item"),
+        productId,
+        quantity: product.minOrderQty,
+        note: "",
+        artFileName: "",
+        artFileUrl: "",
+      },
+    ]);
+    setProductPickerOpen(false);
+  }
+
+  function updateItemQuantity(itemId: string, quantity: number) {
+    const itemProduct = selectedItems.find(({ item }) => item.id === itemId)?.product;
+    const nextQuantity = Math.max(itemProduct?.minOrderQty ?? 1, quantity || 0);
+    syncDraft(
+      draftItems.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              quantity: nextQuantity,
+            }
+          : item,
       ),
-    });
+    );
   }
 
-  function addFraction() {
-    onDraftChange({
-      ...draft,
-      fractions: [
-        ...draft.fractions,
-        {
-          id: `fraction-${Date.now()}`,
-          quantity: selectedProduct?.minFractionQty ?? 50,
-          color: firstProductColor(selectedProduct),
-          note: "",
-        },
-      ],
-    });
+  function updateItemNote(itemId: string, note: string) {
+    syncDraft(draftItems.map((item) => (item.id === itemId ? { ...item, note } : item)));
   }
 
-  function removeFraction(index: number) {
-    onDraftChange({
-      ...draft,
-      fractions: draft.fractions.filter((_, currentIndex) => currentIndex !== index),
-    });
+  function removeItem(itemId: string) {
+    syncDraft(draftItems.filter((item) => item.id !== itemId));
+  }
+
+  function clearOrder() {
+    syncDraft([]);
+    setNoteItemId(null);
+  }
+
+  function saveDraft() {
+    window.localStorage.setItem("graphflow.orderDraft.manual", JSON.stringify(draft));
+    setDraftSaved(true);
+    window.setTimeout(() => setDraftSaved(false), 1800);
+  }
+
+  async function uploadItemArt(itemId: string, input: HTMLInputElement) {
+    const file = input.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const uploaded = await safeUploadFile(onUploadFile, file, "orders");
+    if (!uploaded) {
+      input.value = "";
+      return;
+    }
+
+    syncDraft(
+      draftItems.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              artFileName: uploaded.name,
+              artFileUrl: uploaded.url,
+            }
+          : item,
+      ),
+    );
+    input.value = "";
   }
 
   return (
-    <form className="modal-form" onSubmit={onSubmit}>
-      <ModalHeader icon={ClipboardList} title="Novo Pedido" subtitle="Pedido com fracionamento validado." />
+    <form className="new-order-form" onSubmit={onSubmit}>
+      <header className="new-order-page-head">
+        <div className="new-order-heading">
+          <span className="new-order-back">
+            <ChevronLeft size={20} />
+          </span>
+          <h2>Novo pedido</h2>
+          <em>Rascunho</em>
+        </div>
+        <div className="new-order-header-actions">
+          {draftSaved ? <span className="new-order-saved">Rascunho salvo</span> : null}
+          <button className="ghost-button" type="button" onClick={saveDraft}>
+            Salvar rascunho
+          </button>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={Boolean(validation) || selectedItems.length === 0}
+            data-testid="add-to-cart"
+          >
+            <Check size={17} />
+            Finalizar pedido
+          </button>
+        </div>
+      </header>
 
-      <div className="form-grid">
-        <label>
-          Cliente
-          <select
-            data-testid="customer-search"
-            value={draft.customerId}
-            onChange={(event) => onDraftChange({ ...draft, customerId: event.target.value })}
-          >
-            {clients.map((client) => (
-              <option key={client.id} value={client.id}>
-                {client.name} · {client.company}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Produto
-          <select
-            data-testid="product-search"
-            value={draft.productId}
-            onChange={(event) => {
-              const product = products.find((item) => item.id === event.target.value);
-              const color = firstProductColor(product);
-              onDraftChange({
-                ...draft,
-                productId: event.target.value,
-                quantity: product?.minOrderQty ?? draft.quantity,
-                fractions: product?.allowsFractions
-                  ? [
-                      {
-                        id: "fraction-1",
-                        quantity: product.minFractionQty,
-                        color,
-                        note: "",
-                      },
-                    ]
-                  : [],
-              });
-            }}
-          >
-            {products.map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Quantidade
+      <div className="new-order-body">
+        <div className="new-order-main-column">
+      <div className="new-order-top-grid">
+        <label className="new-order-field">
+          <span>Número do pedido</span>
           <input
-            data-testid="item-quantity"
-            min={1}
-            value={draft.quantity}
-            type="number"
-            onChange={(event) => onDraftChange({ ...draft, quantity: Number(event.target.value) })}
+            value="Gerado ao finalizar"
+            readOnly
           />
         </label>
-        <label>
-          Entrega
+
+        <label className="new-order-field">
+          <span>Data do pedido <b>*</b></span>
           <input
-            value={draft.deliveryDate}
+            value={draft.orderDate}
             type="date"
             min={todayInputDate()}
-            onChange={(event) => onDraftChange({ ...draft, deliveryDate: event.target.value })}
+            onChange={(event) => onDraftChange({ ...draft, orderDate: event.target.value })}
           />
         </label>
-        <label>
-          Arte do produto
-          <span className="upload-field">
-            <Upload size={16} />
-            <span>{draft.artFileUrl ? draft.artFileName || "Arte enviada" : "Selecionar arte"}</span>
-            <input
-              type="file"
-              onChange={async (event) => {
-                const input = event.currentTarget;
-                const file = event.target.files?.[0];
-                if (!file) return;
-                const uploaded = await onUploadFile(file, "orders");
-                onDraftChange({ ...draft, artFileName: uploaded.name, artFileUrl: uploaded.url });
-                input.value = "";
-              }}
-            />
+
+        <label className="new-order-field new-order-notes-field">
+          <span>
+            <MessageCircle size={16} />
+            Observações (opcional)
           </span>
+          <textarea
+            maxLength={500}
+            value={draft.notes ?? ""}
+            placeholder="Adicione observações sobre o pedido..."
+            onChange={(event) => onDraftChange({ ...draft, notes: event.target.value })}
+          />
+          <small>{draft.notes?.length ?? 0}/500</small>
         </label>
       </div>
 
-      {selectedProduct?.allowsFractions ? (
-        <div className="fraction-builder" data-testid="fraction-builder">
-          <div className="fraction-head">
+        <section className="new-order-items-card">
+          <div className="new-order-card-title">
             <div>
-              <strong>Frações</strong>
-              <span>
-                {formatNumber(fractionTotal)} / {formatNumber(draft.quantity)}
+              <span className="new-order-title-icon">
+                <ShoppingBag size={20} />
               </span>
-            </div>
-            <button className="ghost-button compact" type="button" onClick={addFraction} data-testid="add-fraction">
-              <Plus size={16} />
-              Fração
-            </button>
-          </div>
-          <div
-            className={`fraction-progress ${validation ? "invalid" : "valid"}`}
-            data-testid="fraction-progress"
-          >
-            <span style={{ width: `${Math.min(100, (fractionTotal / Math.max(draft.quantity, 1)) * 100)}%` }} />
-          </div>
-          <div className="fraction-list">
-            {draft.fractions.map((fraction, index) => (
-              <div className="fraction-row" key={fraction.id}>
-                <input
-                  data-testid={`fraction-${index}-quantity`}
-                  min={0}
-                  value={fraction.quantity}
-                  type="number"
-                  onChange={(event) => updateFraction(index, { quantity: Number(event.target.value) })}
-                />
-                {selectedProduct?.availableColors?.length ? (
-                  <select
-                    data-testid={`fraction-${index}-cor`}
-                    value={fraction.color || firstProductColor(selectedProduct)}
-                    onChange={(event) => updateFraction(index, { color: event.target.value })}
-                  >
-                    {selectedProduct.availableColors.map((color) => (
-                      <option value={color} key={color}>
-                        {color}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    data-testid={`fraction-${index}-cor`}
-                    value={fraction.color}
-                    placeholder="Cor"
-                    onChange={(event) => updateFraction(index, { color: event.target.value })}
-                  />
-                )}
-                <input
-                  value={fraction.note}
-                  placeholder="Observação"
-                  onChange={(event) => updateFraction(index, { note: event.target.value })}
-                />
-                <button className="icon-button" type="button" onClick={() => removeFraction(index)} aria-label="Remover fração" title="Remover fração">
-                  <Trash2 size={16} />
-                </button>
+              <div>
+                <strong>Itens do pedido</strong>
+                <small>Adicione itens ao pedido</small>
               </div>
-            ))}
+            </div>
           </div>
-          {validation ? (
-            <p className="form-error" data-testid="fraction-error">
-              {validation}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
 
-      <div className="modal-total">
-        <span>Total estimado</span>
-        <strong>{formatCurrency(orderTotal)}</strong>
+          <div className="new-order-items-toolbar">
+            <label className="new-order-search">
+              <Search size={18} />
+              <input
+                value={productSearch}
+                placeholder="Buscar por nome ou código do item..."
+                onChange={(event) => setProductSearch(event.target.value)}
+              />
+            </label>
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="all">Todos os itens</option>
+              {categories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="new-order-product-table is-order-items">
+            <div className="new-order-product-head">
+              <span>Item</span>
+              <span>Descrição</span>
+              <span>Preço unitário</span>
+              <span>Quantidade</span>
+              <span>Total</span>
+              <span>Ações</span>
+            </div>
+            {selectedItems.map(({ item, product }) => {
+              const lineTotal = calculateOrderTotal(product, item.quantity);
+              return (
+                <div className="new-order-product-row" key={item.id}>
+                  <div className="new-order-product-main">
+                    <Image
+                      src={productDisplayImage(product)}
+                      alt={product.name}
+                      width={46}
+                      height={46}
+                      unoptimized
+                      onError={(event) => {
+                        event.currentTarget.src = quoteProductImage(product);
+                      }}
+                    />
+                    <div>
+                      <strong>{product.name}</strong>
+                      <small>{product.sku ?? product.id}</small>
+                      {item.artFileName ? <em>{item.artFileName}</em> : null}
+                    </div>
+                  </div>
+                  <div className="new-order-product-description">
+                    <span>{product.description || product.commercialDescription || product.category}</span>
+                    <small>{product.packageDimensionsCm || product.leadTime}</small>
+                  </div>
+                  <span>
+                    {formatCurrency(product.price)}
+                    <small>/ {formatNumber(product.minOrderQty)} un</small>
+                  </span>
+                  <div className="new-order-qty-stepper">
+                    <button
+                      type="button"
+                      onClick={() => updateItemQuantity(item.id, item.quantity - product.minOrderQty)}
+                      disabled={item.quantity <= product.minOrderQty}
+                      aria-label="Diminuir quantidade"
+                    >
+                      <Minus size={15} />
+                    </button>
+                    <input
+                      value={item.quantity}
+                      type="number"
+                      min={product.minOrderQty}
+                      onChange={(event) => updateItemQuantity(item.id, Number(event.target.value))}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateItemQuantity(item.id, item.quantity + product.minOrderQty)}
+                      aria-label="Aumentar quantidade"
+                    >
+                      <Plus size={15} />
+                    </button>
+                  </div>
+                  <strong>{formatCurrency(lineTotal)}</strong>
+                  <div className="new-order-line-actions">
+                    <label title="Enviar arte">
+                      <Paperclip size={16} />
+                      <input
+                        type="file"
+                        onChange={(event) => void uploadItemArt(item.id, event.currentTarget)}
+                      />
+                    </label>
+                    <button type="button" onClick={() => removeItem(item.id)} aria-label="Remover item">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {selectedItems.length === 0 ? (
+              <div className="new-order-empty-products">Nenhum item adicionado.</div>
+            ) : null}
+          </div>
+
+          <button
+            className="new-order-add-wide"
+            type="button"
+            onClick={() => setProductPickerOpen((current) => !current)}
+          >
+            <Plus size={18} />
+            Adicionar item
+          </button>
+
+          {productPickerOpen ? (
+            <div className="new-order-product-picker">
+              {filteredProducts.map((product) => (
+                <button type="button" key={product.id} onClick={() => addOrderItem(product.id)}>
+                  <Image
+                    src={productDisplayImage(product)}
+                    alt={product.name}
+                    width={42}
+                    height={42}
+                    unoptimized
+                    onError={(event) => {
+                      event.currentTarget.src = quoteProductImage(product);
+                    }}
+                  />
+                  <span>
+                    <strong>{product.name}</strong>
+                    <small>{product.sku ?? product.id} · {formatCurrency(product.price)}</small>
+                  </span>
+                  <Plus size={16} />
+                </button>
+              ))}
+              {filteredProducts.length === 0 ? <span>Nenhum produto encontrado.</span> : null}
+            </div>
+          ) : null}
+
+          <div className="new-order-pagination">
+            <span>
+              Mostrando {selectedItems.length} de {selectedItems.length} itens
+            </span>
+            <div>
+              <button className="icon-button" type="button" disabled aria-label="Página anterior">
+                <ChevronLeft size={16} />
+              </button>
+              <button className="orders-page-number" type="button">1</button>
+              <button className="icon-button" type="button" disabled aria-label="Próxima página">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        </section>
+        </div>
+
+        <aside className="new-order-summary-card">
+          <div className="new-order-summary-head">
+            <div>
+              <span className="new-order-title-icon">
+                <ClipboardList size={19} />
+              </span>
+              <strong>Resumo do pedido</strong>
+            </div>
+            <span>{selectedItems.length} {selectedItems.length === 1 ? "item" : "itens"}</span>
+          </div>
+
+          <div className="new-order-summary-table">
+            <div className="new-order-summary-table-head">
+              <span>Item</span>
+              <span>Qtd</span>
+              <span>Preço unit.</span>
+              <span>Total</span>
+            </div>
+            {selectedItems.map(({ item, product }) => {
+              const lineTotal = calculateOrderTotal(product, item.quantity);
+              return (
+                <div className="new-order-summary-line" key={item.id}>
+                  <div className="new-order-summary-product">
+                    <Image
+                      src={productDisplayImage(product)}
+                      alt={product.name}
+                      width={46}
+                      height={46}
+                      unoptimized
+                      onError={(event) => {
+                        event.currentTarget.src = quoteProductImage(product);
+                      }}
+                    />
+                    <div>
+                      <strong>{product.name}</strong>
+                      <small>{product.sku ?? product.id}</small>
+                      {item.artFileName ? <em>{item.artFileName}</em> : null}
+                    </div>
+                  </div>
+                  <span>{formatNumber(item.quantity)} un</span>
+                  <span>{formatCurrency(product.price)}</span>
+                  <strong>{formatCurrency(lineTotal)}</strong>
+                </div>
+              );
+            })}
+            {selectedItems.length === 0 ? (
+              <div className="new-order-empty-summary">
+                <Package size={22} />
+                <span>Nenhum item adicionado.</span>
+              </div>
+            ) : null}
+            {firstSelectedItem ? (
+              <>
+                <button
+                  className="new-order-note-toggle"
+                  type="button"
+                  onClick={() => setNoteItemId(noteItemId === firstSelectedItem.item.id ? null : firstSelectedItem.item.id)}
+                >
+                  <Plus size={16} />
+                  {firstSelectedItem.item.note ? "Editar observação do item" : "Adicionar observação ao item"}
+                </button>
+                {noteItemId === firstSelectedItem.item.id ? (
+                  <textarea
+                    className="new-order-item-note"
+                    value={firstSelectedItem.item.note}
+                    placeholder="Acabamento, cores, referência ou instrução específica..."
+                    onChange={(event) => updateItemNote(firstSelectedItem.item.id, event.target.value)}
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </div>
+
+          <button className="new-order-clear" type="button" onClick={clearOrder} disabled={selectedItems.length === 0}>
+            <Trash2 size={16} />
+            Limpar pedido
+          </button>
+
+          <div className="new-order-financial">
+            <strong>Resumo financeiro</strong>
+            <span>
+              Subtotal
+              <b>{formatCurrency(subtotal)}</b>
+            </span>
+            <span>
+              Descontos
+              <b>{formatCurrency(discount)}</b>
+            </span>
+            <span>
+              Frete
+              <button type="button">Calcular</button>
+            </span>
+            <div>
+              <span>Total estimado</span>
+              <strong>{formatCurrency(total)}</strong>
+            </div>
+          </div>
+
+          <div className="new-order-final-summary">
+            <strong>Resumo final</strong>
+            <div className="new-order-final-grid">
+              <div>
+                <span>Estabelecimento</span>
+                <p>GraphFlow Matriz</p>
+                <small>São Paulo · contato@graphflow.com.br</small>
+              </div>
+              <label className="new-order-final-client">
+                <span>Cliente</span>
+                <select
+                  data-testid="customer-search"
+                  value={draft.customerId}
+                  onChange={(event) => onDraftChange({ ...draft, customerId: event.target.value })}
+                >
+                  <option value="">Selecionar cliente (opcional)</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name} - {client.company}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="new-order-final-products">
+                <span>Produtos do pedido</span>
+                {selectedItems.length ? (
+                  selectedItems.map(({ item, product }) => (
+                    <small key={item.id}>
+                      {product.name} · {formatNumber(item.quantity)} un · {formatCurrency(calculateOrderTotal(product, item.quantity))}
+                    </small>
+                  ))
+                ) : (
+                  <small>Adicione produtos para concluir o resumo.</small>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {validation ? <p className="form-error">{validation}</p> : null}
+        </aside>
       </div>
-      <button className="primary-button wide" type="submit" disabled={Boolean(validation)} data-testid="add-to-cart">
-        <Send size={18} />
-        Criar Pedido
-      </button>
     </form>
   );
 }
-
 function ClientForm({
   draft,
   onUploadFile,
@@ -8128,7 +9742,11 @@ function ClientForm({
                 const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
-                const uploaded = await onUploadFile(file, "clients");
+                const uploaded = await safeUploadFile(onUploadFile, file, "clients");
+                if (!uploaded) {
+                  input.value = "";
+                  return;
+                }
                 onDraftChange({ ...draft, avatarUrl: uploaded.url });
                 input.value = "";
               }}
@@ -8257,7 +9875,11 @@ function UserForm({
                 const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
-                const uploaded = await onUploadFile(file, "users");
+                const uploaded = await safeUploadFile(onUploadFile, file, "users");
+                if (!uploaded) {
+                  input.value = "";
+                  return;
+                }
                 onDraftChange({ ...draft, avatarUrl: uploaded.url });
                 input.value = "";
               }}
@@ -8326,6 +9948,7 @@ function ProductForm({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const validation = validateProductFiscalDraft(draft);
+  const fiscalDisabled = draft.skipFiscalData;
 
   function updateFiscal(update: Partial<ProductFiscalData>) {
     onDraftChange({ ...draft, fiscal: { ...draft.fiscal, ...update } });
@@ -8338,16 +9961,24 @@ function ProductForm({
       <div className={`nfe-diagnosis ${validation.ready ? "ready" : "blocked"}`}>
         <ShieldCheck size={18} />
         <div>
-          <strong>{validation.ready ? "Cadastro apto para emissao de NF-e" : "Cadastro com pendencias - NF-e bloqueada ate correcao"}</strong>
+          <strong>
+            {fiscalDisabled
+              ? "Cadastro sem dados fiscais"
+              : validation.ready
+                ? "Cadastro apto para emissao de NF-e"
+                : "Cadastro com pendencias - NF-e bloqueada ate correcao"}
+          </strong>
           <span>
-            {validation.ready
-              ? validation.alerts.slice(0, 2).join(" | ") || "Campos fiscais obrigatorios preenchidos."
-              : [...validation.missing, ...validation.invalid].slice(0, 3).join(" | ")}
+            {fiscalDisabled
+              ? "Os campos fiscais foram desativados e nao serao exigidos neste cadastro."
+              : validation.ready
+                ? validation.alerts.slice(0, 2).join(" | ") || "Campos fiscais obrigatorios preenchidos."
+                : [...validation.missing, ...validation.invalid].slice(0, 3).join(" | ")}
           </span>
         </div>
       </div>
 
-      <div className="form-grid client-form-grid product-fiscal-form">
+      <div className={`form-grid client-form-grid product-fiscal-form ${fiscalDisabled ? "is-fiscal-disabled" : ""}`}>
         <div className="form-section-title span-3">Identificacao</div>
         <TextField label="Codigo interno / SKU" value={draft.sku} onChange={(sku) => onDraftChange({ ...draft, sku })} required />
         <TextField label="Nome" value={draft.name} onChange={(name) => onDraftChange({ ...draft, name, commercialDescription: draft.commercialDescription || name })} required />
@@ -8378,7 +10009,11 @@ function ProductForm({
                 const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
-                const uploaded = await onUploadFile(file, "products");
+                const uploaded = await safeUploadFile(onUploadFile, file, "products");
+                if (!uploaded) {
+                  input.value = "";
+                  return;
+                }
                 onDraftChange({ ...draft, thumbnailUrl: uploaded.url });
                 input.value = "";
               }}
@@ -8394,12 +10029,22 @@ function ProductForm({
           />
         </label>
 
-        <div className="form-section-title span-3">Dados fiscais e tributarios</div>
-        <TextField label="NCM (8 digitos)" value={draft.fiscal.ncm} onChange={(ncm) => updateFiscal({ ncm })} required />
-        <TextField label="CEST" value={draft.fiscal.cest} onChange={(cest) => updateFiscal({ cest })} />
+        <div className="form-section-title span-3 product-fiscal-heading">
+          <span>Dados fiscais e tributarios</span>
+          <label className="product-fiscal-toggle">
+            <input
+              checked={fiscalDisabled}
+              type="checkbox"
+              onChange={(event) => onDraftChange({ ...draft, skipFiscalData: event.target.checked })}
+            />
+            Sem Dados Fiscais
+          </label>
+        </div>
+        <TextField label="NCM (8 digitos)" value={draft.fiscal.ncm} onChange={(ncm) => updateFiscal({ ncm })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="CEST" value={draft.fiscal.cest} onChange={(cest) => updateFiscal({ cest })} disabled={fiscalDisabled} />
         <label>
           Origem
-          <select value={draft.fiscal.origin} onChange={(event) => updateFiscal({ origin: event.target.value })}>
+          <select value={draft.fiscal.origin} disabled={fiscalDisabled} onChange={(event) => updateFiscal({ origin: event.target.value })}>
             <option value="0">0 - Nacional</option>
             <option value="1">1 - Importacao direta</option>
             <option value="2">2 - Importada mercado interno</option>
@@ -8411,21 +10056,22 @@ function ProductForm({
             <option value="8">8 - Nacional acima 70% importado</option>
           </select>
         </label>
-        <TextField label="CFOP padrao saida" value={draft.fiscal.cfop} onChange={(cfop) => updateFiscal({ cfop })} required />
-        <TextField label="CST / CSOSN ICMS" value={draft.fiscal.icmsCstCsosn} onChange={(icmsCstCsosn) => updateFiscal({ icmsCstCsosn })} required />
-        <TextField label="CST PIS" value={draft.fiscal.pisCst} onChange={(pisCst) => updateFiscal({ pisCst })} required />
-        <TextField label="CST COFINS" value={draft.fiscal.cofinsCst} onChange={(cofinsCst) => updateFiscal({ cofinsCst })} required />
-        <TextField label="CST IPI" value={draft.fiscal.ipiCst} onChange={(ipiCst) => updateFiscal({ ipiCst })} />
-        <TextField label="Aliquota ICMS (%)" value={draft.fiscal.icmsRate} onChange={(icmsRate) => updateFiscal({ icmsRate })} required />
-        <TextField label="Aliquota PIS (%)" value={draft.fiscal.pisRate} onChange={(pisRate) => updateFiscal({ pisRate })} required />
-        <TextField label="Aliquota COFINS (%)" value={draft.fiscal.cofinsRate} onChange={(cofinsRate) => updateFiscal({ cofinsRate })} required />
-        <TextField label="Aliquota IPI (%)" value={draft.fiscal.ipiRate} onChange={(ipiRate) => updateFiscal({ ipiRate })} />
+        <TextField label="CFOP padrao saida" value={draft.fiscal.cfop} onChange={(cfop) => updateFiscal({ cfop })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="CST / CSOSN ICMS" value={draft.fiscal.icmsCstCsosn} onChange={(icmsCstCsosn) => updateFiscal({ icmsCstCsosn })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="CST PIS" value={draft.fiscal.pisCst} onChange={(pisCst) => updateFiscal({ pisCst })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="CST COFINS" value={draft.fiscal.cofinsCst} onChange={(cofinsCst) => updateFiscal({ cofinsCst })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="CST IPI" value={draft.fiscal.ipiCst} onChange={(ipiCst) => updateFiscal({ ipiCst })} disabled={fiscalDisabled} />
+        <TextField label="Aliquota ICMS (%)" value={draft.fiscal.icmsRate} onChange={(icmsRate) => updateFiscal({ icmsRate })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="Aliquota PIS (%)" value={draft.fiscal.pisRate} onChange={(pisRate) => updateFiscal({ pisRate })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="Aliquota COFINS (%)" value={draft.fiscal.cofinsRate} onChange={(cofinsRate) => updateFiscal({ cofinsRate })} required={!fiscalDisabled} disabled={fiscalDisabled} />
+        <TextField label="Aliquota IPI (%)" value={draft.fiscal.ipiRate} onChange={(ipiRate) => updateFiscal({ ipiRate })} disabled={fiscalDisabled} />
         <label className="span-3">
           Informacoes adicionais fiscais
           <textarea
             value={draft.fiscal.additionalInfo}
             maxLength={600}
             placeholder="Beneficio fiscal, observacao legal ou mensagem exibida na NF-e."
+            disabled={fiscalDisabled}
             onChange={(event) => updateFiscal({ additionalInfo: event.target.value })}
           />
         </label>
@@ -8745,7 +10391,11 @@ function FileForm({
                 const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
-                const uploaded = await onUploadFile(file, "files");
+                const uploaded = await safeUploadFile(onUploadFile, file, "files");
+                if (!uploaded) {
+                  input.value = "";
+                  return;
+                }
                 onDraftChange({ ...draft, name: draft.name || uploaded.name, url: uploaded.url });
                 input.value = "";
               }}
@@ -9202,7 +10852,11 @@ function OrderDetail({
                 const input = event.currentTarget;
                 const file = event.target.files?.[0];
                 if (!file) return;
-                const uploaded = await onUploadFile(file, "orders");
+                const uploaded = await safeUploadFile(onUploadFile, file, "orders");
+                if (!uploaded) {
+                  input.value = "";
+                  return;
+                }
                 setArtDraft({ ...artDraft, name: artDraft.name || uploaded.name, url: uploaded.url });
                 input.value = "";
               }}
@@ -9224,10 +10878,10 @@ function BrandBlock({ compact }: { compact: boolean }) {
       <Image
         src={GRAPHFLOW_LOGO_SRC}
         alt="GraficFlow"
-        width={compact ? 160 : 220}
-        height={compact ? 42 : 64}
+        width={compact ? 300 : 220}
+        height={compact ? 80 : 64}
         className={compact ? "brand-logo-compact" : "brand-logo-image"}
-        style={{ width: compact ? 160 : 220, height: compact ? 42 : 64, objectFit: "contain" }}
+        style={{ width: "100%", height: "auto", objectFit: "contain" }}
         priority
       />
       <div>
@@ -9494,6 +11148,37 @@ function QuickAction({
   );
 }
 
+function DatabaseActionCard({
+  icon: Icon,
+  title,
+  description,
+  detail,
+  tone,
+  danger = false,
+  onClick,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  detail: string;
+  tone: string;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button className={`database-action-card ${danger ? "danger" : ""}`} style={{ "--action-tone": tone } as CSSProperties} type="button" onClick={onClick}>
+      <span>
+        <Icon size={19} />
+      </span>
+      <div>
+        <strong>{title}</strong>
+        <small>{description}</small>
+        <em>{detail}</em>
+      </div>
+    </button>
+  );
+}
+
 function Modal({
   mode,
   children,
@@ -9503,6 +11188,69 @@ function Modal({
   children: ReactNode;
   onClose: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!mode) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+
+      if (e.key === "Tab") {
+        const panel = panelRef.current;
+        if (!panel) return;
+        const focusableElements = Array.from(
+          panel.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((element) => !element.hasAttribute("disabled") && element.tabIndex !== -1);
+        const firstElement = focusableElements[0];
+        const lastElement = focusableElements[focusableElements.length - 1];
+
+        if (!firstElement || !lastElement) return;
+
+        if (e.shiftKey) {
+          if (document.activeElement === firstElement) {
+            e.preventDefault();
+            lastElement?.focus();
+          }
+        } else {
+          if (document.activeElement === lastElement) {
+            e.preventDefault();
+            firstElement?.focus();
+          }
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    const focusTimer = window.setTimeout(() => {
+      const panel = panelRef.current;
+      if (!panel || panel.contains(document.activeElement)) return;
+
+      const firstInput = panel.querySelector<HTMLElement>('input:not([disabled]), textarea:not([disabled]), select:not([disabled])');
+      if (firstInput) {
+        firstInput.focus();
+      } else {
+        const firstButton = panel.querySelector<HTMLElement>('button:not([disabled])');
+        firstButton?.focus();
+      }
+    }, 10);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [mode]);
+
   if (!mode) {
     return null;
   }
@@ -9510,7 +11258,10 @@ function Modal({
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <button className="modal-scrim" type="button" aria-label="Fechar modal" onClick={onClose} />
-      <div className="modal-panel">
+      <div
+        className={`modal-panel${mode === "order" ? " modal-panel-order" : ""}${mode === "quote" ? " modal-panel-quote" : ""}`}
+        ref={panelRef}
+      >
         <button className="modal-close icon-button" type="button" aria-label="Fechar" title="Fechar" onClick={onClose}>
           <X size={18} />
         </button>
@@ -9548,6 +11299,7 @@ function TextField({
   type = "text",
   placeholder,
   required = false,
+  disabled = false,
   onChange,
 }: {
   label: string;
@@ -9555,6 +11307,7 @@ function TextField({
   type?: string;
   placeholder?: string;
   required?: boolean;
+  disabled?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
@@ -9565,6 +11318,7 @@ function TextField({
         type={type}
         placeholder={placeholder}
         required={required}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>
@@ -9592,6 +11346,7 @@ function StatusPill({ status }: { status: OrderStatus }) {
   const meta = statusMeta[status];
   return (
     <span className="status-pill" style={{ "--status": meta.color, "--status-bg": meta.bg } as CSSProperties} data-testid="order-status">
+      <i aria-hidden="true" />
       {meta.label}
     </span>
   );
@@ -9602,7 +11357,12 @@ function PriorityTag({ priority }: { priority: Order["priority"] }) {
 }
 
 function ClientStatus({ status }: { status: Client["status"] }) {
-  return <span className={`client-status ${normalizeText(status)}`}>{status}</span>;
+  return (
+    <span className={`client-status ${normalizeText(status)}`}>
+      <i aria-hidden="true" />
+      {status}
+    </span>
+  );
 }
 
 function MachineStatus({ status }: { status: Machine["status"] }) {

@@ -8,11 +8,11 @@ import type {
   CreateQuoteInput,
   UpdateQuoteInput,
 } from "../../http/schemas.js";
-import { gone, notFound, unauthorized } from "../../shared/errors/http-error.js";
+import { conflict, gone, notFound, unauthorized } from "../../shared/errors/http-error.js";
 import type { SupabaseServiceClient } from "../../shared/supabase/client.js";
 import { assertSupabaseOk } from "../../shared/supabase/result.js";
-import { documentNumber, randomId, randomToken } from "../../shared/utils/ids.js";
-import { lineTotal, subtotal } from "../../shared/utils/money.js";
+import { DOCUMENT_NUMBER_MAX_ATTEMPTS, documentNumber, isDocumentNumberConflict, randomId, randomToken } from "../../shared/utils/ids.js";
+import { lineTotal, roundMoney, subtotal } from "../../shared/utils/money.js";
 import { stripUndefined } from "../../shared/utils/objects.js";
 
 type QuoteListInput = {
@@ -72,36 +72,54 @@ export class QuotesService {
 
     const now = new Date().toISOString();
     const quoteId = randomId("quo");
-    const total = subtotal(input.items);
+    const quoteSubtotal = subtotal(input.items);
+    const discountAmount = roundMoney(input.discountAmount ?? 0);
+    const taxAmount = roundMoney(input.taxAmount ?? 0);
+    const total = roundMoney(Math.max(0, quoteSubtotal - discountAmount) + taxAmount);
     const rawToken = randomToken();
     const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000).toISOString();
 
-    const quoteResult = await this.supabase
-      .from("quotes")
-      .insert({
-        id: quoteId,
-        tenantId: input.tenantId,
-        customerId: input.customerId,
-        userId: auth.userId,
-        number: documentNumber("ORC"),
-        status: input.sendNow ? "SENT" : "DRAFT",
-        validUntil: input.validUntil,
-        notes: input.notes ?? null,
-        internalNotes: input.internalNotes ?? null,
-        subtotal: total,
-        discountAmount: 0,
-        taxAmount: 0,
-        total,
-        metadata: {
-          publicLinkCreatedAt: now,
-        },
-        createdAt: now,
-        updatedAt: now,
-      })
-      .select("*")
-      .single();
+    let quoteData: Record<string, unknown> | null = null;
 
-    assertSupabaseOk(quoteResult.error, "criar orcamento");
+    for (let attempt = 0; attempt < DOCUMENT_NUMBER_MAX_ATTEMPTS; attempt += 1) {
+      const quoteResult = await this.supabase
+        .from("quotes")
+        .insert({
+          id: quoteId,
+          tenantId: input.tenantId,
+          customerId: input.customerId,
+          userId: auth.userId,
+          number: documentNumber("ORC"),
+          status: input.sendNow ? "SENT" : "DRAFT",
+          validUntil: input.validUntil,
+          notes: input.notes ?? null,
+          internalNotes: input.internalNotes ?? null,
+          subtotal: quoteSubtotal,
+          discountAmount,
+          taxAmount,
+          total,
+          metadata: {
+            ...input.metadata,
+            publicLinkCreatedAt: now,
+          },
+          createdAt: now,
+          updatedAt: now,
+        })
+        .select("*")
+        .single();
+
+      if (isDocumentNumberConflict(quoteResult.error)) {
+        continue;
+      }
+
+      assertSupabaseOk(quoteResult.error, "criar orcamento");
+      quoteData = quoteResult.data as Record<string, unknown>;
+      break;
+    }
+
+    if (!quoteData) {
+      throw conflict("Nao foi possivel gerar um numero unico para o orcamento. Tente novamente.");
+    }
 
     const items = input.items.map((item) => ({
       id: randomId("qit"),
@@ -139,7 +157,7 @@ export class QuotesService {
     assertSupabaseOk(tokenResult.error, "criar link publico do orcamento");
 
     return {
-      ...quoteResult.data,
+      ...quoteData,
       quote_items: itemsResult.data ?? [],
       publicLink: this.publicQuoteLink(quoteId, rawToken),
       publicLinkExpiresAt: expiresAt,
@@ -162,7 +180,7 @@ export class QuotesService {
   }
 
   async getPublicQuote(quoteId: string, token: string) {
-    const publicToken = await this.verifyPublicToken(quoteId, token);
+    const publicToken = await this.verifyPublicToken(quoteId, token, { allowAccepted: true });
 
     const quote = await this.supabase
       .from("quotes")
@@ -173,11 +191,34 @@ export class QuotesService {
     assertSupabaseOk(quote.error, "buscar orcamento publico");
     if (!quote.data) throw notFound("Orcamento nao encontrado.");
 
+    const [customer, responsibleUser, tenant] = await Promise.all([
+      this.supabase
+        .from("customers")
+        .select("id,name,companyName,email,phone,whatsapp,document,documentType,addressStreet,addressNumber,addressComplement,addressDistrict,addressCity,addressState,addressZip")
+        .eq("id", quote.data.customerId)
+        .maybeSingle(),
+      quote.data.userId
+        ? this.supabase.from("users").select("id,name,email,phone").eq("id", quote.data.userId).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      this.supabase.from("tenants").select("id,name,slug").eq("id", publicToken.tenantId).maybeSingle(),
+    ]);
+    assertSupabaseOk(customer.error, "buscar cliente do orcamento publico");
+    assertSupabaseOk(responsibleUser.error, "buscar responsavel do orcamento publico");
+    assertSupabaseOk(tenant.error, "buscar empresa do orcamento publico");
+
     if (quote.data.status === "SENT") {
       await this.supabase.from("quotes").update({ status: "VIEWED" }).eq("id", quoteId);
     }
 
-    return quote.data;
+    return {
+      ...quote.data,
+      status: publicToken.acceptedAt ? "ACCEPTED" : quote.data.status === "SENT" ? "VIEWED" : quote.data.status,
+      customer: customer.data ?? null,
+      responsibleUser: responsibleUser.data ?? null,
+      tenant: tenant.data ?? null,
+      publicLinkExpiresAt: publicToken.expiresAt,
+      publicLinkAcceptedAt: publicToken.acceptedAt,
+    };
   }
 
   async accept(input: AcceptQuoteInput) {
@@ -236,7 +277,11 @@ export class QuotesService {
     return result.data;
   }
 
-  private async verifyPublicToken(quoteId: string, token: string): Promise<PublicTokenRow> {
+  private async verifyPublicToken(
+    quoteId: string,
+    token: string,
+    options: { allowAccepted?: boolean } = {},
+  ): Promise<PublicTokenRow> {
     const result = await this.supabase
       .from("quote_public_tokens")
       .select("*")
@@ -248,11 +293,11 @@ export class QuotesService {
     assertSupabaseOk(result.error, "validar link publico");
     if (!result.data) throw unauthorized("Link de orcamento invalido.");
 
-    if (result.data.acceptedAt) {
+    if (result.data.acceptedAt && !options.allowAccepted) {
       throw gone("Orcamento ja foi aceito por este link.");
     }
 
-    if (Date.parse(result.data.expiresAt) < Date.now()) {
+    if (!result.data.acceptedAt && Date.parse(result.data.expiresAt) < Date.now()) {
       throw gone("Link de orcamento expirado.");
     }
 

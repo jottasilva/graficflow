@@ -280,6 +280,184 @@ export const updateNotificationSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "Informe ao menos um campo para atualizar.");
 
+const metadataSchema = z.record(z.string(), z.unknown()).default({});
+const positiveMoneySchema = z.coerce.number().positive().multipleOf(0.01);
+const optionalDateTimeSchema = z.string().datetime().optional();
+
+const supplierBaseSchema = z.object({
+  tenantId: idSchema,
+  documentType: z.enum(["CPF", "CNPJ", "IE", "FOREIGN"]).default("CNPJ"),
+  document: z.string().trim().min(2).max(32),
+  name: z.string().trim().min(2).max(180),
+  companyName: z.string().trim().max(180).optional(),
+  email: z.string().trim().email().optional().or(z.literal("")),
+  phone: z.string().trim().max(30).optional(),
+  whatsapp: z.string().trim().max(30).optional(),
+  contactName: z.string().trim().max(160).optional(),
+  categories: z.array(z.string().trim().min(1).max(80)).max(30).default([]),
+  addressZip: z.string().trim().max(12).optional(),
+  addressStreet: z.string().trim().max(160).optional(),
+  addressNumber: z.string().trim().max(30).optional(),
+  addressComplement: z.string().trim().max(120).optional(),
+  addressDistrict: z.string().trim().max(120).optional(),
+  addressCity: z.string().trim().max(120).optional(),
+  addressState: z.string().trim().length(2).optional().or(z.literal("")),
+  addressCountry: z.string().trim().length(2).default("BR"),
+  paymentTerms: z.string().trim().max(240).optional(),
+  notes: optionalTextSchema,
+  metadata: metadataSchema,
+});
+
+export const createSupplierSchema = supplierBaseSchema.superRefine((input, context) => {
+  const digits = input.document.replace(/\D/g, "");
+  if (input.documentType === "CPF" && digits.length !== 11) {
+    context.addIssue({ code: "custom", path: ["document"], message: "CPF deve ter 11 digitos." });
+  }
+  if (input.documentType === "CNPJ" && digits.length !== 14) {
+    context.addIssue({ code: "custom", path: ["document"], message: "CNPJ deve ter 14 digitos." });
+  }
+});
+
+export const updateSupplierSchema = supplierBaseSchema
+  .omit({ tenantId: true })
+  .extend({
+    status: z.enum(["ACTIVE", "BLOCKED", "INACTIVE"]).optional(),
+  })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "Informe ao menos um campo para atualizar.");
+
+export const createPurchaseOrderItemSchema = z.object({
+  productId: idSchema.optional(),
+  inventoryId: idSchema.optional(),
+  description: z.string().trim().min(2).max(300),
+  quantity: quantitySchema,
+  unitCost: positiveMoneySchema,
+  discount: moneySchema.default(0),
+  metadata: metadataSchema,
+});
+
+export const createPurchaseOrderSchema = z.object({
+  tenantId: idSchema,
+  supplierId: idSchema,
+  expectedDeliveryAt: optionalDateTimeSchema,
+  status: z.enum(["DRAFT", "SENT", "APPROVED"]).default("DRAFT"),
+  discountAmount: moneySchema.default(0),
+  shippingAmount: moneySchema.default(0),
+  taxAmount: moneySchema.default(0),
+  notes: optionalTextSchema,
+  metadata: metadataSchema,
+  items: z.array(createPurchaseOrderItemSchema).min(1).max(100),
+});
+
+export const updatePurchaseOrderSchema = z
+  .object({
+    status: z.enum(["DRAFT", "SENT", "APPROVED", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELED"]).optional(),
+    paymentStatus: z.enum(["PENDING", "PARTIAL", "PAID", "OVERDUE", "CANCELED"]).optional(),
+    expectedDeliveryAt: z.string().datetime().nullable().optional(),
+    receivedAt: z.string().datetime().nullable().optional(),
+    paidAmount: moneySchema.optional(),
+    notes: optionalTextSchema.nullable(),
+    metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "Informe ao menos um campo para atualizar.");
+
+export const createPaymentTransactionSchema = z.object({
+  tenantId: idSchema,
+  orderId: idSchema.optional(),
+  quoteId: idSchema.optional(),
+  purchaseOrderId: idSchema.optional(),
+  financeId: idSchema.optional(),
+  direction: z.enum(["incoming", "outgoing"]),
+  method: z.enum(["PIX", "BOLETO", "CARD", "CASH", "BANK_TRANSFER", "OTHER"]),
+  provider: z.string().trim().max(120).optional(),
+  providerReference: z.string().trim().max(180).optional(),
+  amount: positiveMoneySchema,
+  feeAmount: moneySchema.default(0),
+  status: z.enum(["PENDING", "AUTHORIZED", "PAID", "FAILED", "CANCELED", "REFUNDED"]).default("PENDING"),
+  dueAt: optionalDateTimeSchema,
+  paidAt: optionalDateTimeSchema,
+  metadata: metadataSchema,
+});
+
+export const updatePaymentTransactionSchema = z
+  .object({
+    status: z.enum(["PENDING", "AUTHORIZED", "PAID", "FAILED", "CANCELED", "REFUNDED"]).optional(),
+    provider: z.string().trim().max(120).nullable().optional(),
+    providerReference: z.string().trim().max(180).nullable().optional(),
+    dueAt: z.string().datetime().nullable().optional(),
+    paidAt: z.string().datetime().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "Informe ao menos um campo para atualizar.");
+
+export const createFiscalDocumentSchema = z.object({
+  tenantId: idSchema,
+  orderId: idSchema.optional(),
+  customerId: idSchema.optional(),
+  type: z.enum(["NFE", "NFCE", "NFSE"]),
+  operation: z.enum(["SALE", "SERVICE", "RETURN", "CANCEL"]).default("SALE"),
+  environment: z.enum(["HOMOLOGATION", "PRODUCTION"]).default("HOMOLOGATION"),
+  provider: z.string().trim().max(120).optional(),
+  series: z.string().trim().max(20).optional(),
+  number: z.string().trim().max(40).optional(),
+  payload: metadataSchema,
+  metadata: metadataSchema,
+});
+
+export const updateFiscalDocumentSchema = z
+  .object({
+    status: z.enum(["DRAFT", "QUEUED", "PROCESSING", "AUTHORIZED", "REJECTED", "CANCELED"]).optional(),
+    provider: z.string().trim().max(120).nullable().optional(),
+    series: z.string().trim().max(20).nullable().optional(),
+    number: z.string().trim().max(40).nullable().optional(),
+    accessKey: z.string().trim().max(80).nullable().optional(),
+    protocol: z.string().trim().max(120).nullable().optional(),
+    issuedAt: z.string().datetime().nullable().optional(),
+    canceledAt: z.string().datetime().nullable().optional(),
+    xmlUrl: z.string().trim().url().nullable().optional(),
+    pdfUrl: z.string().trim().url().nullable().optional(),
+    rejectionReason: z.string().trim().max(1000).nullable().optional(),
+    payload: z.record(z.string(), z.unknown()).nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "Informe ao menos um campo para atualizar.");
+
+export const createProductionWorkLogSchema = z.object({
+  tenantId: idSchema,
+  orderItemId: idSchema,
+  machineId: idSchema.optional(),
+  sectorId: idSchema.optional(),
+  type: z.enum(["START", "PAUSE", "RESUME", "FINISH", "REWORK", "LOSS", "NOTE"]),
+  quantityGood: z.coerce.number().nonnegative().default(0),
+  quantityLoss: z.coerce.number().nonnegative().default(0),
+  minutes: z.coerce.number().int().nonnegative().default(0),
+  notes: z.string().trim().max(1000).optional(),
+  metadata: metadataSchema,
+});
+
+export const createQualityInspectionSchema = z
+  .object({
+    tenantId: idSchema,
+    orderItemId: idSchema,
+    status: z.enum(["APPROVED", "REJECTED", "REWORK"]),
+    checkedQty: quantitySchema,
+    rejectedQty: z.coerce.number().nonnegative().default(0),
+    checklist: z.record(z.string(), z.union([z.boolean(), z.string(), z.number()])).default({}),
+    notes: z.string().trim().max(1000).optional(),
+  })
+  .superRefine((input, context) => {
+    if (input.rejectedQty > input.checkedQty) {
+      context.addIssue({ code: "custom", path: ["rejectedQty"], message: "Rejeitado nao pode exceder conferido." });
+    }
+  });
+
+export const reportQuerySchema = tenantQuerySchema
+  .pick({ tenantId: true })
+  .extend({
+    dateFrom: z.string().date().optional(),
+    dateTo: z.string().date().optional(),
+  });
+
 export const permissionKeySchema = z.enum([
   "dashboard:read",
   "orders:read",
@@ -300,6 +478,15 @@ export const permissionKeySchema = z.enum([
   "quotes:write",
   "finance:read",
   "finance:write",
+  "suppliers:read",
+  "suppliers:write",
+  "purchases:read",
+  "purchases:write",
+  "payments:read",
+  "payments:write",
+  "fiscal:read",
+  "fiscal:write",
+  "audit:read",
   "reports:read",
   "files:read",
   "files:write",
@@ -485,8 +672,11 @@ export const createQuoteSchema = z.object({
   validUntil: z.string().datetime(),
   notes: optionalTextSchema,
   internalNotes: optionalTextSchema,
+  discountAmount: moneySchema.default(0),
+  taxAmount: moneySchema.default(0),
   sendNow: z.boolean().default(true),
   expiresInDays: z.coerce.number().int().min(1).max(90).default(15),
+  metadata: metadataSchema,
   items: z.array(createQuoteItemSchema).min(1).max(100),
 });
 
@@ -519,6 +709,17 @@ export type UpdateInventoryInput = z.infer<typeof updateInventorySchema>;
 export type CreateFinanceEntryInput = z.infer<typeof createFinanceEntrySchema>;
 export type CreateFileInput = z.infer<typeof createFileSchema>;
 export type UpdateNotificationInput = z.infer<typeof updateNotificationSchema>;
+export type CreateSupplierInput = z.infer<typeof createSupplierSchema>;
+export type UpdateSupplierInput = z.infer<typeof updateSupplierSchema>;
+export type CreatePurchaseOrderInput = z.infer<typeof createPurchaseOrderSchema>;
+export type UpdatePurchaseOrderInput = z.infer<typeof updatePurchaseOrderSchema>;
+export type CreatePaymentTransactionInput = z.infer<typeof createPaymentTransactionSchema>;
+export type UpdatePaymentTransactionInput = z.infer<typeof updatePaymentTransactionSchema>;
+export type CreateFiscalDocumentInput = z.infer<typeof createFiscalDocumentSchema>;
+export type UpdateFiscalDocumentInput = z.infer<typeof updateFiscalDocumentSchema>;
+export type CreateProductionWorkLogInput = z.infer<typeof createProductionWorkLogSchema>;
+export type CreateQualityInspectionInput = z.infer<typeof createQualityInspectionSchema>;
+export type ReportQueryInput = z.infer<typeof reportQuerySchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 export type UpdateUserPasswordInput = z.infer<typeof updateUserPasswordSchema>;

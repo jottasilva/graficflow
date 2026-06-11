@@ -1,0 +1,66 @@
+services:
+  graphflow-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      APP_ORIGIN: ${APP_ORIGIN}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      DATABASE_URL: ${DATABASE_URL}
+      AUTH_LOGIN_PROVIDER: ${AUTH_LOGIN_PROVIDER:-auto}
+      KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
+      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      SUPABASE_AUTH_CALLBACK_URL: ${SUPABASE_AUTH_CALLBACK_URL}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-graphflow_session}
+      AUTH_REFRESH_COOKIE_NAME: ${AUTH_REFRESH_COOKIE_NAME:-graphflow_refresh}
+      AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN}
+      QUOTE_PUBLIC_TOKEN_PEPPER: ${QUOTE_PUBLIC_TOKEN_PEPPER}
+      PDF_STORAGE_BUCKET: ${PDF_STORAGE_BUCKET:-quote-pdfs}
+      UPLOAD_STORAGE_BUCKET: ${UPLOAD_STORAGE_BUCKET:-graphflow-uploads}
+      UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-25}
+      DEV_AUTH_BYPASS: "false"
+      DEV_TENANT_ID: ${NEXT_PUBLIC_GRAPHFLOW_TENANT_ID:-graphflow-main}
+      DEV_USER_ID: ${DEV_USER_ID:-dev-user}
+      DEV_ADMIN_EMAIL: ${DEV_ADMIN_EMAIL:-admin@email.com}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  graphflow-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_GRAPHFLOW_API_URL: ${NEXT_PUBLIC_GRAPHFLOW_API_URL}
+        NEXT_PUBLIC_GRAPHFLOW_TENANT_ID: ${NEXT_PUBLIC_GRAPHFLOW_TENANT_ID:-graphflow-main}
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      NEXT_PUBLIC_GRAPHFLOW_API_URL: ${NEXT_PUBLIC_GRAPHFLOW_API_URL}
+      NEXT_PUBLIC_GRAPHFLOW_TENANT_ID: ${NEXT_PUBLIC_GRAPHFLOW_TENANT_ID:-graphflow-main}
+    ports:
+      - "3000:3000"
+    depends_on:
+      graphflow-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

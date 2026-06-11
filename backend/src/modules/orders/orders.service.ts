@@ -5,10 +5,10 @@ import type {
   MoveOrderItemInput,
   UpdateOrderInput,
 } from "../../http/schemas.js";
-import { notFound } from "../../shared/errors/http-error.js";
+import { conflict, notFound } from "../../shared/errors/http-error.js";
 import type { SupabaseServiceClient } from "../../shared/supabase/client.js";
 import { assertSupabaseOk } from "../../shared/supabase/result.js";
-import { randomId, documentNumber } from "../../shared/utils/ids.js";
+import { DOCUMENT_NUMBER_MAX_ATTEMPTS, documentNumber, isDocumentNumberConflict, randomId } from "../../shared/utils/ids.js";
 import { lineTotal, subtotal } from "../../shared/utils/money.js";
 import { stripUndefined } from "../../shared/utils/objects.js";
 
@@ -99,35 +99,49 @@ export class OrdersService {
     const orderId = randomId("ord");
     const total = subtotal(input.items);
 
-    const orderResult = await this.supabase
-      .from("orders")
-      .insert({
-        id: orderId,
-        tenantId: input.tenantId,
-        customerId: input.customerId,
-        userId: auth.userId,
-        quoteId: input.quoteId ?? null,
-        number: documentNumber("PED"),
-        status: "CONFIRMED",
-        paymentStatus: "PENDING",
-        productionStatus: "WAITING",
-        subtotal: total,
-        discountAmount: 0,
-        taxAmount: 0,
-        shippingAmount: 0,
-        total,
-        paidAmount: 0,
-        remainingAmount: total,
-        notes: input.notes ?? null,
-        internalNotes: input.internalNotes ?? null,
-        expectedDeliveryAt: input.expectedDeliveryAt ?? null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .select("*")
-      .single();
+    let orderData: Record<string, unknown> | null = null;
 
-    assertSupabaseOk(orderResult.error, "criar pedido");
+    for (let attempt = 0; attempt < DOCUMENT_NUMBER_MAX_ATTEMPTS; attempt += 1) {
+      const orderResult = await this.supabase
+        .from("orders")
+        .insert({
+          id: orderId,
+          tenantId: input.tenantId,
+          customerId: input.customerId,
+          userId: auth.userId,
+          quoteId: input.quoteId ?? null,
+          number: documentNumber("PED"),
+          status: "CONFIRMED",
+          paymentStatus: "PENDING",
+          productionStatus: "WAITING",
+          subtotal: total,
+          discountAmount: 0,
+          taxAmount: 0,
+          shippingAmount: 0,
+          total,
+          paidAmount: 0,
+          remainingAmount: total,
+          notes: input.notes ?? null,
+          internalNotes: input.internalNotes ?? null,
+          expectedDeliveryAt: input.expectedDeliveryAt ?? null,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .select("*")
+        .single();
+
+      if (isDocumentNumberConflict(orderResult.error)) {
+        continue;
+      }
+
+      assertSupabaseOk(orderResult.error, "criar pedido");
+      orderData = orderResult.data as Record<string, unknown>;
+      break;
+    }
+
+    if (!orderData) {
+      throw conflict("Nao foi possivel gerar um numero unico para o pedido. Tente novamente.");
+    }
 
     const items = input.items.map((item, index) => ({
       id: randomId("itm"),
@@ -155,7 +169,7 @@ export class OrdersService {
     assertSupabaseOk(itemResult.error, "criar itens do pedido");
 
     return {
-      ...orderResult.data,
+      ...orderData,
       order_items: itemResult.data ?? [],
     };
   }

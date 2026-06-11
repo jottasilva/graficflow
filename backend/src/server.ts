@@ -7,6 +7,7 @@ import { z } from "zod";
 import { loadEnv } from "./config/env.js";
 import {
   acceptQuoteSchema,
+  createFiscalDocumentSchema,
   createFileSchema,
   createFinanceEntrySchema,
   createClientSchema,
@@ -14,38 +15,55 @@ import {
   createMachineSchema,
   createMaintenanceTicketSchema,
   createOrderSchema,
+  createPaymentTransactionSchema,
   createProductSchema,
+  createProductionWorkLogSchema,
+  createPurchaseOrderSchema,
+  createQualityInspectionSchema,
   createQuoteSchema,
   createSectorSchema,
+  createSupplierSchema,
   createUserSchema,
   loginSchema,
   moveOrderItemSchema,
   recoverPasswordSchema,
+  reportQuerySchema,
   registerSchema,
   tenantQuerySchema,
   updateClientSchema,
+  updateFiscalDocumentSchema,
   updateFileSchema,
   updateInventorySchema,
   updateMachineSchema,
   updateMaintenanceTicketSchema,
   updateNotificationSchema,
   updateOrderSchema,
+  updatePaymentTransactionSchema,
   updateProductSchema,
+  updatePurchaseOrderSchema,
   updateQuoteSchema,
   updateSectorSchema,
+  updateSupplierSchema,
   updateUserPasswordSchema,
   updateUserSchema,
 } from "./http/schemas.js";
 import { assertPermission, assertTenantAccess, createAuthProvider } from "./http/middleware/auth.js";
+import { AuditService } from "./modules/audit/audit.service.js";
 import { AuthService } from "./modules/auth/auth.service.js";
 import { ClientsService } from "./modules/clients/clients.service.js";
+import { FiscalService } from "./modules/fiscal/fiscal.service.js";
 import { GraphqlReadService } from "./modules/graphql/graphql-read.service.js";
 import { InventoryService } from "./modules/inventory/inventory.service.js";
 import { MachinesService } from "./modules/machines/machines.service.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
+import { PaymentsService } from "./modules/payments/payments.service.js";
 import { ProductsService } from "./modules/products/products.service.js";
+import { ProductionService } from "./modules/production/production.service.js";
+import { PurchasesService } from "./modules/purchases/purchases.service.js";
 import { QuotesService } from "./modules/quotes/quotes.service.js";
+import { ReportsService } from "./modules/reports/reports.service.js";
 import { SectorsService } from "./modules/sectors/sectors.service.js";
+import { SuppliersService } from "./modules/suppliers/suppliers.service.js";
 import { UsersService } from "./modules/users/users.service.js";
 import { HttpError } from "./shared/errors/http-error.js";
 import { createSupabaseServiceClient } from "./shared/supabase/client.js";
@@ -53,7 +71,8 @@ import { assertSupabaseOk } from "./shared/supabase/result.js";
 import { randomId } from "./shared/utils/ids.js";
 
 const env = loadEnv();
-const UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
+const UPLOAD_MAX_BYTES = env.UPLOAD_MAX_MB * 1024 * 1024;
+const UPLOAD_MAX_LABEL = `${env.UPLOAD_MAX_MB}MB`;
 const uploadMimeTypes = new Set([
   "image/jpeg",
   "image/png",
@@ -66,15 +85,22 @@ const uploadMimeTypes = new Set([
 const app = Fastify({ logger: true, bodyLimit: UPLOAD_MAX_BYTES + 512_000 });
 const supabase = createSupabaseServiceClient(env);
 const authProvider = createAuthProvider(env, supabase);
+const auditService = new AuditService(supabase);
 const authService = new AuthService(env, supabase);
 const clientsService = new ClientsService(supabase);
+const fiscalService = new FiscalService(supabase, auditService);
 const graphqlReadService = new GraphqlReadService(env);
 const inventoryService = new InventoryService(supabase);
 const machinesService = new MachinesService(supabase);
 const ordersService = new OrdersService(supabase);
+const paymentsService = new PaymentsService(supabase, auditService);
 const productsService = new ProductsService(supabase);
+const productionService = new ProductionService(supabase, auditService);
+const purchasesService = new PurchasesService(supabase, auditService);
 const quotesService = new QuotesService(supabase, env);
+const reportsService = new ReportsService(supabase);
 const sectorsService = new SectorsService(supabase);
+const suppliersService = new SuppliersService(supabase, auditService);
 const usersService = new UsersService(supabase, env);
 
 await app.register(helmet);
@@ -122,7 +148,7 @@ function cookieOptions(maxAge?: number) {
     path: "/",
     httpOnly: true,
     secure: env.NODE_ENV === "production",
-    sameSite: "lax" as const,
+    sameSite: env.NODE_ENV === "production" ? ("none" as const) : ("lax" as const),
     domain: env.AUTH_COOKIE_DOMAIN,
     maxAge,
   };
@@ -194,6 +220,19 @@ app.setErrorHandler((error, _request, reply) => {
   }
 
   const parsedError = error as { statusCode?: number; code?: string; message?: string };
+  if (
+    parsedError.statusCode === 413 ||
+    parsedError.code === "FST_REQ_FILE_TOO_LARGE" ||
+    parsedError.code === "FST_ERR_CTP_BODY_TOO_LARGE" ||
+    /file too large|request.*too large/i.test(parsedError.message ?? "")
+  ) {
+    return reply.code(413).send({
+      code: "UPLOAD_TOO_LARGE",
+      message: `Arquivo acima do limite de ${UPLOAD_MAX_LABEL}.`,
+      limitMb: env.UPLOAD_MAX_MB,
+    });
+  }
+
   const httpStatus = typeof parsedError.statusCode === "number" ? parsedError.statusCode : 500;
   if (httpStatus >= 400 && httpStatus < 500) {
     return reply.code(httpStatus).send({
@@ -261,7 +300,7 @@ app.post("/api/uploads", async (request, reply) => {
 
   const buffer = await file.toBuffer();
   if (!buffer.length || buffer.length > UPLOAD_MAX_BYTES) {
-    throw new HttpError(400, "Arquivo vazio ou acima do limite de 8MB.", "INVALID_UPLOAD_SIZE");
+    throw new HttpError(400, `Arquivo vazio ou acima do limite de ${UPLOAD_MAX_LABEL}.`, "INVALID_UPLOAD_SIZE");
   }
 
   await ensureUploadBucket();
@@ -526,6 +565,163 @@ app.post("/api/finance", async (request, reply) => {
 
   assertSupabaseOk(result.error, "criar lancamento financeiro");
   return reply.code(201).send(result.data);
+});
+
+app.get("/api/suppliers", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "suppliers:read");
+  const input = tenantQuerySchema.parse(request.query);
+  return suppliersService.list(input, auth);
+});
+
+app.post("/api/suppliers", async (request, reply) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "suppliers:write");
+  const input = createSupplierSchema.parse(request.body);
+  const supplier = await suppliersService.create(input, auth);
+  return reply.code(201).send(supplier);
+});
+
+app.patch("/api/suppliers/:id", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "suppliers:write");
+  const params = z.object({ id: z.string().min(1) }).parse(request.params);
+  const input = updateSupplierSchema.parse(request.body);
+  return suppliersService.update(params.id, input, auth);
+});
+
+app.delete("/api/suppliers/:id", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "suppliers:write");
+  const params = z.object({ id: z.string().min(1) }).parse(request.params);
+  return suppliersService.remove(params.id, auth);
+});
+
+app.get("/api/purchase-orders", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "purchases:read");
+  const input = tenantQuerySchema.parse(request.query);
+  return purchasesService.list(input, auth);
+});
+
+app.post("/api/purchase-orders", async (request, reply) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "purchases:write");
+  const input = createPurchaseOrderSchema.parse(request.body);
+  const purchase = await purchasesService.create(input, auth);
+  return reply.code(201).send(purchase);
+});
+
+app.patch("/api/purchase-orders/:id", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "purchases:write");
+  const params = z.object({ id: z.string().min(1) }).parse(request.params);
+  const input = updatePurchaseOrderSchema.parse(request.body);
+  return purchasesService.update(params.id, input, auth);
+});
+
+app.delete("/api/purchase-orders/:id", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "purchases:write");
+  const params = z.object({ id: z.string().min(1) }).parse(request.params);
+  return purchasesService.remove(params.id, auth);
+});
+
+app.get("/api/payments", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "payments:read");
+  const input = tenantQuerySchema.parse(request.query);
+  return paymentsService.list(input, auth);
+});
+
+app.post("/api/payments", async (request, reply) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "payments:write");
+  const input = createPaymentTransactionSchema.parse(request.body);
+  const payment = await paymentsService.create(input, auth);
+  return reply.code(201).send(payment);
+});
+
+app.patch("/api/payments/:id", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "payments:write");
+  const params = z.object({ id: z.string().min(1) }).parse(request.params);
+  const input = updatePaymentTransactionSchema.parse(request.body);
+  return paymentsService.update(params.id, input, auth);
+});
+
+app.get("/api/fiscal-documents", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "fiscal:read");
+  const input = tenantQuerySchema.parse(request.query);
+  return fiscalService.list(input, auth);
+});
+
+app.post("/api/fiscal-documents", async (request, reply) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "fiscal:write");
+  const input = createFiscalDocumentSchema.parse(request.body);
+  const document = await fiscalService.create(input, auth);
+  return reply.code(201).send(document);
+});
+
+app.patch("/api/fiscal-documents/:id", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "fiscal:write");
+  const params = z.object({ id: z.string().min(1) }).parse(request.params);
+  const input = updateFiscalDocumentSchema.parse(request.body);
+  return fiscalService.update(params.id, input, auth);
+});
+
+app.post("/api/fiscal-documents/:id/queue", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "fiscal:write");
+  const params = z.object({ id: z.string().min(1) }).parse(request.params);
+  return fiscalService.queue(params.id, auth);
+});
+
+app.get("/api/production/work-logs", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "production:read");
+  const input = tenantQuerySchema.parse(request.query);
+  return productionService.listWorkLogs(input, auth);
+});
+
+app.post("/api/production/work-logs", async (request, reply) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "production:write");
+  const input = createProductionWorkLogSchema.parse(request.body);
+  const log = await productionService.createWorkLog(input, auth);
+  return reply.code(201).send(log);
+});
+
+app.get("/api/production/quality-inspections", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "production:read");
+  const input = tenantQuerySchema.parse(request.query);
+  return productionService.listQualityInspections(input, auth);
+});
+
+app.post("/api/production/quality-inspections", async (request, reply) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "production:write");
+  const input = createQualityInspectionSchema.parse(request.body);
+  const inspection = await productionService.createQualityInspection(input, auth);
+  return reply.code(201).send(inspection);
+});
+
+app.get("/api/reports/management", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "reports:read");
+  const input = reportQuerySchema.parse(request.query);
+  return reportsService.management(input, auth);
+});
+
+app.get("/api/audit-logs", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "audit:read");
+  const input = tenantQuerySchema.parse(request.query);
+  return auditService.list(input, auth);
 });
 
 app.get("/api/files", async (request) => {
@@ -864,4 +1060,12 @@ app.post("/public/quotes/:quoteId/accept", async (request, reply) => {
   return reply.code(200).send(acceptance);
 });
 
-await app.listen({ port: env.PORT, host: "0.0.0.0" });
+export { app };
+
+export async function startServer() {
+  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+}
+
+if (process.env.VERCEL !== "1") {
+  await startServer();
+}

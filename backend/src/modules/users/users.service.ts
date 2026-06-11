@@ -7,6 +7,7 @@ import type { SupabaseServiceClient } from "../../shared/supabase/client.js";
 import { assertSupabaseOk } from "../../shared/supabase/result.js";
 import { randomId } from "../../shared/utils/ids.js";
 import { stripUndefined } from "../../shared/utils/objects.js";
+import { usesSupabaseAuth } from "../auth/provider-selection.js";
 
 type UserListInput = {
   tenantId: string;
@@ -18,6 +19,8 @@ type UserListInput = {
 type UserRow = {
   id: string;
   tenantId: string;
+  name: string;
+  email: string;
   role: string | null;
   permissions: string[] | null;
 };
@@ -26,6 +29,11 @@ type KeycloakUser = {
   id: string;
   email?: string;
   username?: string;
+};
+
+type ProviderUser = {
+  id: string;
+  email?: string;
 };
 
 function canManageUsers(auth: AuthContext): boolean {
@@ -105,9 +113,11 @@ export class UsersService {
     assertTenantAccess(auth, input.tenantId);
     if (!canManageUsers(auth)) throw forbidden("Usuario sem permissao para criar usuarios.");
 
-    const keycloakUser = await this.createKeycloakUserIfConfigured(input);
+    const providerUser = usesSupabaseAuth(this.env)
+      ? await this.createSupabaseUserIfPasswordProvided(input)
+      : await this.createKeycloakUserIfConfigured(input);
     const now = new Date().toISOString();
-    const userId = keycloakUser?.id ?? randomId("usr");
+    const userId = providerUser?.id ?? randomId("usr");
 
     const result = await this.supabase
       .from("users")
@@ -172,6 +182,18 @@ export class UsersService {
     assertTenantAccess(auth, current.tenantId);
     if (!canManageUsers(auth)) throw forbidden("Usuario sem permissao para trocar senha.");
 
+    if (usesSupabaseAuth(this.env)) {
+      await this.createOrUpdateSupabaseUser({
+        email: current.email,
+        password: input.password,
+        name: current.name,
+        tenantId: current.tenantId,
+        role: current.role ?? "OPERATOR",
+      });
+
+      return { id, passwordUpdated: true, provider: "supabase" };
+    }
+
     if (!keycloakConfigured(this.env)) {
       if (this.env.NODE_ENV === "production") {
         throw badRequest("Credenciais administrativas do Keycloak nao configuradas.");
@@ -221,7 +243,7 @@ export class UsersService {
   private async getUserTenant(id: string): Promise<UserRow> {
     const result = await this.supabase
       .from("users")
-      .select("id,tenantId,role,permissions")
+      .select("id,tenantId,name,email,role,permissions")
       .eq("id", id)
       .is("deletedAt", null)
       .maybeSingle<UserRow>();
@@ -281,6 +303,111 @@ export class UsersService {
     );
 
     assertSupabaseOk(insert.error, "vincular setores ao usuario");
+  }
+
+  private async createSupabaseUserIfPasswordProvided(input: CreateUserInput): Promise<ProviderUser | null> {
+    if (!input.password) return null;
+
+    return this.createOrUpdateSupabaseUser({
+      email: input.email,
+      password: input.password,
+      name: input.name,
+      tenantId: input.tenantId,
+      role: input.role,
+    });
+  }
+
+  private async createOrUpdateSupabaseUser(input: {
+    email: string;
+    password: string;
+    name: string;
+    tenantId: string;
+    role: string;
+  }): Promise<ProviderUser> {
+    const existing = await this.findSupabaseAuthUser(input.email);
+    if (existing) {
+      await this.updateSupabaseAuthUser(existing.id, input);
+      return existing;
+    }
+
+    const result = await this.supabase.auth.admin.createUser({
+      email: input.email,
+      password: input.password,
+      email_confirm: true,
+      app_metadata: {
+        tenantId: input.tenantId,
+        role: input.role,
+      },
+      user_metadata: {
+        name: input.name,
+      },
+    });
+
+    if (result.error || !result.data.user?.id) {
+      const createdAfterConflict = await this.findSupabaseAuthUser(input.email);
+      if (createdAfterConflict) {
+        await this.updateSupabaseAuthUser(createdAfterConflict.id, input);
+        return createdAfterConflict;
+      }
+
+      throw upstreamError("Supabase Auth nao conseguiu criar usuario.");
+    }
+
+    return {
+      id: result.data.user.id,
+      email: result.data.user.email ?? input.email,
+    };
+  }
+
+  private async updateSupabaseAuthUser(
+    userId: string,
+    input: {
+      email: string;
+      password: string;
+      name: string;
+      tenantId: string;
+      role: string;
+    },
+  ) {
+    const result = await this.supabase.auth.admin.updateUserById(userId, {
+      email: input.email,
+      password: input.password,
+      email_confirm: true,
+      app_metadata: {
+        tenantId: input.tenantId,
+        role: input.role,
+      },
+      user_metadata: {
+        name: input.name,
+      },
+    });
+
+    if (result.error) {
+      throw upstreamError("Supabase Auth nao conseguiu atualizar usuario.");
+    }
+  }
+
+  private async findSupabaseAuthUser(email: string): Promise<ProviderUser | null> {
+    const normalizedEmail = email.toLowerCase();
+    const perPage = 1000;
+
+    for (let page = 1; page <= 10; page += 1) {
+      const result = await this.supabase.auth.admin.listUsers({ page, perPage });
+      if (result.error) throw upstreamError("Supabase Auth nao conseguiu buscar usuarios.");
+
+      const users = result.data.users ?? [];
+      const user = users.find((candidate) => candidate.email?.toLowerCase() === normalizedEmail);
+      if (user?.id) {
+        return {
+          id: user.id,
+          email: user.email ?? email,
+        };
+      }
+
+      if (users.length < perPage) return null;
+    }
+
+    return null;
   }
 
   private async createKeycloakUserIfConfigured(input: CreateUserInput): Promise<KeycloakUser | null> {

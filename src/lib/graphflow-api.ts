@@ -59,6 +59,88 @@ export type DashboardOverview = {
   };
 };
 
+export type SupplierRecord = {
+  id: string;
+  tenantId: string;
+  documentType: "CPF" | "CNPJ" | "IE" | "FOREIGN";
+  document: string;
+  name: string;
+  companyName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  whatsapp?: string | null;
+  contactName?: string | null;
+  categories?: string[] | null;
+  status: "ACTIVE" | "BLOCKED" | "INACTIVE";
+  paymentTerms?: string | null;
+  notes?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type PurchaseOrderRecord = {
+  id: string;
+  tenantId: string;
+  supplierId: string;
+  number: string;
+  status: "DRAFT" | "SENT" | "APPROVED" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CANCELED";
+  paymentStatus: "PENDING" | "PARTIAL" | "PAID" | "OVERDUE" | "CANCELED";
+  subtotal: number | string;
+  total: number | string;
+  paidAmount: number | string;
+  remainingAmount: number | string;
+  expectedDeliveryAt?: string | null;
+  purchase_order_items?: Array<Record<string, unknown>>;
+};
+
+export type PaymentTransactionRecord = {
+  id: string;
+  tenantId: string;
+  orderId?: string | null;
+  purchaseOrderId?: string | null;
+  direction: "incoming" | "outgoing";
+  method: "PIX" | "BOLETO" | "CARD" | "CASH" | "BANK_TRANSFER" | "OTHER";
+  provider?: string | null;
+  providerReference?: string | null;
+  amount: number | string;
+  feeAmount: number | string;
+  netAmount: number | string;
+  status: "PENDING" | "AUTHORIZED" | "PAID" | "FAILED" | "CANCELED" | "REFUNDED";
+  dueAt?: string | null;
+  paidAt?: string | null;
+};
+
+export type FiscalDocumentRecord = {
+  id: string;
+  tenantId: string;
+  orderId?: string | null;
+  customerId?: string | null;
+  type: "NFE" | "NFCE" | "NFSE";
+  operation: "SALE" | "SERVICE" | "RETURN" | "CANCEL";
+  environment: "HOMOLOGATION" | "PRODUCTION";
+  status: "DRAFT" | "QUEUED" | "PROCESSING" | "AUTHORIZED" | "REJECTED" | "CANCELED";
+  provider?: string | null;
+  number?: string | null;
+  accessKey?: string | null;
+  protocol?: string | null;
+  xmlUrl?: string | null;
+  pdfUrl?: string | null;
+  rejectionReason?: string | null;
+};
+
+export type ManagementReport = {
+  tenantId: string;
+  generatedAt: string;
+  period: { from: string | null; to: string | null };
+  sales: Record<string, number>;
+  quotes: Record<string, number>;
+  finance: Record<string, number>;
+  purchases: Record<string, number>;
+  payments: Record<string, number>;
+  production: Record<string, number>;
+  fiscal: Record<string, number>;
+  quality: Record<string, number>;
+};
+
 export type WorkspaceData = {
   clients: Client[];
   products: Product[];
@@ -201,6 +283,11 @@ type QuoteDto = {
   validUntil: string;
   notes?: string | null;
   status: string | null;
+  subtotal?: number | string | null;
+  discountAmount?: number | string | null;
+  taxAmount?: number | string | null;
+  total?: number | string | null;
+  metadata?: Record<string, unknown> | null;
   createdAt?: string | null;
   publicLink?: string | null;
   quote_items?: QuoteItemDto[];
@@ -345,6 +432,7 @@ function mapProduct(product: ProductDto): Product {
     : DEFAULT_PRODUCT_COLORS;
   const attributes = product.attributes ?? {};
   const fiscal = fiscalMetadata(attributes.fiscal);
+  const hasFiscal = hasFiscalMetadata(attributes.fiscal);
 
   return {
     id: product.id,
@@ -379,13 +467,21 @@ function mapProduct(product: ProductDto): Product {
     packageDimensionsCm: stringMetadata(attributes, "packageDimensionsCm"),
     storageLocation: stringMetadata(attributes, "storageLocation"),
     tracksBatch: attributes.tracksBatch === true,
-    fiscal,
+    fiscal: hasFiscal ? fiscal : undefined,
     isResale: attributes.isResale === true,
     internalNotes: stringMetadata(attributes, "internalNotes"),
     leadTime: String(product.attributes?.leadTime ?? ""),
     active: product.isActive !== false,
     saleBlocked: attributes.saleBlocked === true,
   };
+}
+
+function hasFiscalMetadata(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const fiscal = value as Record<string, unknown>;
+  return [fiscal.ncm, fiscal.icmsCstCsosn, fiscal.pisCst, fiscal.cofinsCst, fiscal.icmsRate, fiscal.pisRate, fiscal.cofinsRate].some(
+    (field) => String(field ?? "").trim().length > 0,
+  );
 }
 
 function fiscalMetadata(value: unknown): ProductFiscalData {
@@ -507,6 +603,7 @@ function mapQuote(quote: QuoteDto, clients: Client[], products: Product[]): Quot
 
   return {
     id: quote.number ?? quote.id,
+    publicQuoteId: quote.id,
     customerId: quote.customerId,
     customerName: client?.name ?? quote.customerId,
     customerEmail: client?.email ?? "",
@@ -640,7 +737,7 @@ function userMetadata(input: Partial<UserAccount>): Record<string, unknown> {
 }
 
 function productAttributes(input: Partial<Product>): Record<string, unknown> {
-  return {
+  const attributes: Record<string, unknown> = {
     leadTime: input.leadTime ?? "",
     availableColors: input.availableColors ?? DEFAULT_PRODUCT_COLORS,
     subcategory: input.subcategory,
@@ -659,11 +756,16 @@ function productAttributes(input: Partial<Product>): Record<string, unknown> {
     packageDimensionsCm: input.packageDimensionsCm,
     storageLocation: input.storageLocation,
     tracksBatch: input.tracksBatch,
-    fiscal: input.fiscal,
     isResale: input.isResale,
     internalNotes: input.internalNotes,
     saleBlocked: input.saleBlocked,
   };
+
+  if (Object.prototype.hasOwnProperty.call(input, "fiscal")) {
+    attributes.fiscal = input.fiscal ?? null;
+  }
+
+  return attributes;
 }
 
 function orderStatusToApi(status: OrderStatus): string {
@@ -803,6 +905,107 @@ export const graphflowApi = {
   async dashboardOverview(): Promise<DashboardOverview> {
     const params = tenantParams();
     return request<DashboardOverview>(`/api/graphql/dashboard-overview?${params.toString()}`);
+  },
+
+  async managementReport(range?: { dateFrom?: string; dateTo?: string }): Promise<ManagementReport> {
+    const params = tenantParams({
+      ...(range?.dateFrom ? { dateFrom: range.dateFrom } : {}),
+      ...(range?.dateTo ? { dateTo: range.dateTo } : {}),
+    });
+    return request<ManagementReport>(`/api/reports/management?${params.toString()}`);
+  },
+
+  async listSuppliers(search = ""): Promise<SupplierRecord[]> {
+    const params = tenantParams(search.trim() ? { search: search.trim() } : undefined);
+    return listPaginated<SupplierRecord>("/api/suppliers", params);
+  },
+
+  async createSupplier(input: Omit<SupplierRecord, "id" | "tenantId" | "status"> & { status?: SupplierRecord["status"] }) {
+    return request<SupplierRecord>("/api/suppliers", {
+      method: "POST",
+      body: JSON.stringify({
+        ...input,
+        tenantId: GRAPHFLOW_TENANT_ID,
+      }),
+    });
+  },
+
+  async listPurchaseOrders(search = ""): Promise<PurchaseOrderRecord[]> {
+    const params = tenantParams(search.trim() ? { search: search.trim() } : undefined);
+    return listPaginated<PurchaseOrderRecord>("/api/purchase-orders", params);
+  },
+
+  async createPurchaseOrder(input: {
+    supplierId: string;
+    expectedDeliveryAt?: string;
+    notes?: string;
+    items: Array<{
+      productId?: string;
+      inventoryId?: string;
+      description: string;
+      quantity: number;
+      unitCost: number;
+      discount?: number;
+    }>;
+  }) {
+    return request<PurchaseOrderRecord>("/api/purchase-orders", {
+      method: "POST",
+      body: JSON.stringify({
+        ...input,
+        tenantId: GRAPHFLOW_TENANT_ID,
+      }),
+    });
+  },
+
+  async listPayments(search = ""): Promise<PaymentTransactionRecord[]> {
+    const params = tenantParams(search.trim() ? { search: search.trim() } : undefined);
+    return listPaginated<PaymentTransactionRecord>("/api/payments", params);
+  },
+
+  async createPayment(input: Omit<PaymentTransactionRecord, "id" | "tenantId" | "feeAmount" | "netAmount"> & { feeAmount?: number }) {
+    return request<PaymentTransactionRecord>("/api/payments", {
+      method: "POST",
+      body: JSON.stringify({
+        ...input,
+        tenantId: GRAPHFLOW_TENANT_ID,
+      }),
+    });
+  },
+
+  async listFiscalDocuments(search = ""): Promise<FiscalDocumentRecord[]> {
+    const params = tenantParams(search.trim() ? { search: search.trim() } : undefined);
+    return listPaginated<FiscalDocumentRecord>("/api/fiscal-documents", params);
+  },
+
+  async createFiscalDocument(input: {
+    orderId?: string;
+    customerId?: string;
+    type: FiscalDocumentRecord["type"];
+    operation?: FiscalDocumentRecord["operation"];
+    environment?: FiscalDocumentRecord["environment"];
+    provider?: string;
+    series?: string;
+    number?: string;
+    payload?: Record<string, unknown>;
+  }) {
+    return request<FiscalDocumentRecord>("/api/fiscal-documents", {
+      method: "POST",
+      body: JSON.stringify({
+        ...input,
+        tenantId: GRAPHFLOW_TENANT_ID,
+      }),
+    });
+  },
+
+  async queueFiscalDocument(id: string) {
+    return request<FiscalDocumentRecord>(`/api/fiscal-documents/${encodeURIComponent(id)}/queue`, {
+      method: "POST",
+    });
+  },
+
+  async listAuditLogs(search = ""): Promise<Array<Record<string, unknown>>> {
+    const params = tenantParams(search.trim() ? { search: search.trim() } : undefined);
+    return listPaginated<Record<string, unknown>>("/api/audit-logs", params);
   },
 
   async listClients(search = ""): Promise<Client[]> {
@@ -1050,27 +1253,42 @@ export const graphflowApi = {
     deliveryDate: string;
     machineId?: string;
     sectorId?: string;
+    items?: Array<{
+      product: Product;
+      quantity: number;
+      machineId?: string;
+      sectorId?: string;
+    }>;
   }, clients: Client[], products: Product[], sectors: Sector[]): Promise<Order> {
     const dueDate = input.deliveryDate ? new Date(`${input.deliveryDate}T12:00:00`).toISOString() : undefined;
+    const orderItems =
+      input.items && input.items.length > 0
+        ? input.items
+        : [
+            {
+              product: input.product,
+              quantity: input.quantity,
+              machineId: input.machineId,
+              sectorId: input.sectorId,
+            },
+          ];
     const order = await request<OrderDto>("/api/orders", {
       method: "POST",
       body: JSON.stringify({
         tenantId: GRAPHFLOW_TENANT_ID,
         customerId: input.customerId,
         expectedDeliveryAt: dueDate,
-        items: [
-          {
-            productId: input.product.id,
-            sectorId: input.sectorId,
-            machineId: input.machineId,
-            description: input.product.name,
-            quantity: input.quantity,
-            unitPrice: input.product.price,
-            discount: 0,
-            priority: input.quantity * input.product.price > 3000 ? "HIGH" : "NORMAL",
-            dueDate,
-          },
-        ],
+        items: orderItems.map(({ product, quantity, machineId, sectorId }) => ({
+          productId: product.id,
+          sectorId,
+          machineId,
+          description: product.name,
+          quantity,
+          unitPrice: product.price,
+          discount: 0,
+          priority: quantity * product.price > 3000 ? "HIGH" : "NORMAL",
+          dueDate,
+        })),
       }),
     });
 
@@ -1082,7 +1300,10 @@ export const graphflowApi = {
     validUntil: string;
     notes: string;
     internalNotes: string;
-    items: QuoteItem[];
+    discountAmount?: number;
+    taxAmount?: number;
+    metadata?: Record<string, unknown>;
+    items: Array<QuoteItem & { notes?: string }>;
     sendNow: boolean;
   }, clients: Client[], products: Product[]): Promise<Quote> {
     const quote = await request<QuoteDto>("/api/quotes", {
@@ -1093,13 +1314,18 @@ export const graphflowApi = {
         validUntil: new Date(`${input.validUntil}T12:00:00`).toISOString(),
         notes: input.notes,
         internalNotes: input.internalNotes,
+        discountAmount: input.discountAmount ?? 0,
+        taxAmount: input.taxAmount ?? 0,
+        metadata: input.metadata ?? {},
         sendNow: input.sendNow,
+        expiresInDays: 15,
         items: input.items.map((item) => ({
           productId: item.productId,
           description: item.productName,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           discount: 0,
+          notes: item.notes,
         })),
       }),
     });

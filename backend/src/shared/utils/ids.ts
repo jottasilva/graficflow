@@ -16,3 +16,11 @@ export function documentNumber(prefix: string): string {
   const suffix = randomBytes(3).toString("hex").toUpperCase();
   return `${prefix}-${y}${m}${d}-${suffix}`;
 }
+
+export const DOCUMENT_NUMBER_MAX_ATTEMPTS = 8;
+
+export function isDocumentNumberConflict(error: { code?: string; message?: string; details?: string | null; hint?: string | null } | null): boolean {
+  if (!error || error.code !== "23505") return false;
+
+  return [error.message, error.details, error.hint].some((value) => String(value ?? "").toLowerCase().includes("number"));
+}

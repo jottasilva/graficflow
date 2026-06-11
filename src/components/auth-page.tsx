@@ -1,11 +1,27 @@
 "use client";
 
 import { graphflowApi } from "@/lib/graphflow-api";
-import { ArrowUpRight, Check, Eye, EyeOff, LockKeyhole, Mail, Send, UserPlus } from "lucide-react";
+import {
+  ArrowUpRight,
+  Check,
+  ChevronDown,
+  Clock3,
+  Eye,
+  EyeOff,
+  Globe2,
+  LockKeyhole,
+  Mail,
+  Send,
+  ShieldCheck,
+  Sun,
+  TrendingUp,
+  UserPlus,
+  type LucideIcon,
+} from "lucide-react";
 import Image from "next/image";
 import { useState, type FormEvent } from "react";
 
-const GRAPHFLOW_LOGO_SRC = "/assets/d2513524-f181-4a63-9fff-94a95de5aacf.png";
+const GRAPHFLOW_MARK_SRC = "/assets/graphflow-mark-transparent.png";
 
 type AuthMode = "login" | "signup" | "recover";
 
@@ -30,7 +46,7 @@ export function AuthPage({
     setFeedback(null);
 
     if (!graphflowApi.enabled()) {
-      setFeedback({ tone: "error", message: "API do GraphFlow nao configurada." });
+      setFeedback({ tone: "error", message: "API do GraphFlow não configurada." });
       return;
     }
 
@@ -43,7 +59,7 @@ export function AuthPage({
 
       if (isRecover) {
         await graphflowApi.recoverPassword(email);
-        setFeedback({ tone: "success", message: "Se o e-mail existir, enviaremos o link de recuperacao." });
+        setFeedback({ tone: "success", message: "Se o e-mail existir, enviaremos o link de recuperação." });
         return;
       }
 
@@ -70,11 +86,16 @@ export function AuthPage({
     } catch (error) {
       setFeedback({
         tone: "error",
-        message: error instanceof Error ? error.message : "Nao foi possivel autenticar.",
+        message: error instanceof Error ? error.message : "Não foi possível autenticar.",
       });
     } finally {
       setLoading(false);
     }
+  }
+
+  function openMode(nextMode: AuthMode) {
+    setMode(nextMode);
+    setFeedback(null);
   }
 
   return (
@@ -82,58 +103,65 @@ export function AuthPage({
       <section className={`auth-card ${isSignup ? "is-signup" : ""}`} aria-label="Acesso ao GraphFlow">
         <aside className="auth-visual">
           <div className="auth-visual-content">
-            <Image
-              src={GRAPHFLOW_LOGO_SRC}
-              alt="GraficFlow"
-              width={430}
-              height={246}
-              className="auth-visual-logo"
-              style={{ width: "min(360px, 100%)", height: 240, objectFit: "contain" }}
-              priority
-            />
-            <p>
-              Gestao inteligente para graficas que querem <strong>crescer.</strong>
-            </p>
+            <div className="auth-visual-logo-wrap">
+              <Image
+                src={GRAPHFLOW_MARK_SRC}
+                alt="GraficFlow"
+                width={146}
+                height={117}
+                className="auth-visual-logo"
+                priority
+              />
+              <span className="auth-visual-brand" aria-hidden="true">
+                Grafic<span>Flow</span>
+              </span>
+            </div>
+
+            <div className="auth-visual-copy">
+              <h2>
+                Gestão inteligente
+                <br />
+                para gráficas que
+                <br />
+                querem <strong>crescer.</strong>
+              </h2>
+              <p>Organize pedidos, clientes, produção e estoque em um só lugar.</p>
+            </div>
+
+            <div className="auth-benefits" aria-label="Benefícios do GraphFlow">
+              <AuthBenefit icon={TrendingUp} title="Mais controle" text="Tenha visão completa do seu negócio" tone="purple" />
+              <AuthBenefit icon={Clock3} title="Mais agilidade" text="Automatize processos e ganhe tempo" tone="blue" />
+              <AuthBenefit icon={ShieldCheck} title="Mais segurança" text="Seus dados protegidos com tecnologia avançada" tone="green" />
+            </div>
           </div>
           <div className="auth-wave" aria-hidden="true" />
         </aside>
 
         <form className={`auth-panel ${isSignup ? "is-signup" : ""}`} onSubmit={handleSubmit}>
-          <div className="auth-copy">
-            <div className="auth-mode-switch" role="tablist" aria-label="Acesso e cadastro">
-              <button
-                aria-selected={mode === "login"}
-                className={mode === "login" ? "active" : ""}
-                role="tab"
-                type="button"
-                onClick={() => {
-                  setMode("login");
-                  setFeedback(null);
-                }}
-              >
-                Login
-              </button>
-              <button
-                aria-selected={mode === "signup"}
-                className={mode === "signup" ? "active" : ""}
-                role="tab"
-                type="button"
-                onClick={() => {
-                  setMode("signup");
-                  setFeedback(null);
-                }}
-              >
-                Cadastro
-              </button>
-            </div>
+          <div className="auth-top-actions" aria-label="Preferências da tela de acesso">
+            <button className="auth-icon-control" type="button" aria-label="Alternar tema">
+              <Sun size={19} />
+            </button>
+            <button className="auth-language-control" type="button" aria-label="Idioma">
+              <Globe2 size={19} />
+              PT-BR
+              <ChevronDown size={16} />
+            </button>
+          </div>
 
-            <h1>{isRecover ? "Recuperar senha" : isSignup ? "Criar sua conta" : "Bem-vindo de volta!"}</h1>
+          <div className="auth-copy">
+            <span className="auth-secure-badge">
+              <ShieldCheck size={17} />
+              Acesso seguro
+            </span>
+
+            <h1>{isRecover ? "Recuperar senha" : isSignup ? "Criar sua conta" : "Bem-vindo de volta! 👋"}</h1>
             <p>
               {isRecover
-                ? "Informe seu e-mail para receber o link de recuperacao."
+                ? "Informe seu e-mail para receber o link de recuperação."
                 : isSignup
-                  ? "Cadastre sua grafica para organizar pedidos, producao e financeiro."
-                  : "Faca login para acessar sua conta."}
+                  ? "Cadastre sua gráfica para organizar pedidos, produção e financeiro."
+                  : "Faça login para acessar sua conta e continuar gerenciando seu negócio."}
             </p>
           </div>
 
@@ -152,7 +180,7 @@ export function AuthPage({
               Empresa
               <span className="auth-input">
                 <ArrowUpRight size={20} />
-                <input name="company" placeholder="Nome da grafica" required type="text" />
+                <input name="company" placeholder="Nome da gráfica" required type="text" />
               </span>
             </label>
           ) : null}
@@ -210,14 +238,7 @@ export function AuthPage({
                 <span>{remember ? <Check size={15} /> : null}</span>
                 Lembrar de mim
               </button>
-              <button
-                className="auth-link"
-                type="button"
-                onClick={() => {
-                  setMode("recover");
-                  setFeedback(null);
-                }}
-              >
+              <button className="auth-link" type="button" onClick={() => openMode("recover")}>
                 Esqueci minha senha
               </button>
             </div>
@@ -230,32 +251,80 @@ export function AuthPage({
             {loading ? "Aguarde" : isRecover ? "Enviar link" : isSignup ? "Criar conta" : "Entrar"}
           </button>
 
+          {!isRecover && !isSignup ? (
+            <>
+              <div className="auth-divider" aria-hidden="true">
+                <span />
+                <em>ou</em>
+                <span />
+              </div>
+              <button
+                className="auth-social-button"
+                type="button"
+                onClick={() =>
+                  setFeedback({
+                    tone: "error",
+                    message: "Login com Google ainda não foi configurado no provedor de autenticação.",
+                  })
+                }
+              >
+                <span className="auth-google-mark" aria-hidden="true">G</span>
+                Entrar com Google
+              </button>
+            </>
+          ) : null}
+
           <p className="auth-footer-text">
             {isRecover ? (
               <>
                 Lembrou sua senha?{" "}
-                <button type="button" onClick={() => setMode("login")}>
+                <button type="button" onClick={() => openMode("login")}>
                   Voltar ao login
                 </button>
               </>
             ) : isSignup ? (
               <>
-                Ja tem uma conta?{" "}
-                <button type="button" onClick={() => setMode("login")}>
+                Já tem uma conta?{" "}
+                <button type="button" onClick={() => openMode("login")}>
                   Entrar
                 </button>
               </>
             ) : (
               <>
-                Ainda nao tem uma conta?{" "}
-                <button type="button" onClick={() => setMode("signup")}>
+                Ainda não tem uma conta?{" "}
+                <button type="button" onClick={() => openMode("signup")}>
                   Criar conta
                 </button>
+                <ArrowUpRight size={16} aria-hidden="true" />
               </>
             )}
           </p>
         </form>
       </section>
     </main>
+  );
+}
+
+function AuthBenefit({
+  icon: Icon,
+  title,
+  text,
+  tone,
+}: {
+  icon: LucideIcon;
+  title: string;
+  text: string;
+  tone: "purple" | "blue" | "green";
+}) {
+  return (
+    <div className={`auth-benefit ${tone}`}>
+      <span>
+        <Icon size={24} />
+      </span>
+      <div>
+        <strong>{title}</strong>
+        <small>{text}</small>
+      </div>
+    </div>
   );
 }

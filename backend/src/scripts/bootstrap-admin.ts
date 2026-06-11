@@ -5,14 +5,20 @@ import { createSupabaseServiceClient } from "../shared/supabase/client.js";
 const env = loadEnv();
 const supabase = createSupabaseServiceClient(env);
 const auth = new AuthService(env, supabase);
+const adminEmail = env.DEV_ADMIN_EMAIL;
+const adminPassword = env.DEV_ADMIN_PASSWORD;
+
+if (!adminPassword) {
+  throw new Error("Defina DEV_ADMIN_PASSWORD para criar ou sincronizar o administrador inicial.");
+}
 
 const result = await auth.bootstrapAdmin({
-  email: "admin@email.com",
-  password: "123456",
+  email: adminEmail,
+  password: adminPassword,
   name: "Administrador GraphFlow",
   companyName: "GraficFlow",
   tenantId: "graphflow-main",
-  temporaryPassword: true,
+  temporaryPassword: false,
 });
 
 console.log(
@@ -20,9 +26,9 @@ console.log(
     {
       ok: true,
       ...result,
-      email: "admin@email.com",
-      temporaryPassword: true,
-      nextStep: "Entrar no Keycloak e trocar a senha temporaria no primeiro acesso.",
+      email: adminEmail,
+      temporaryPassword: false,
+      nextStep: "Entrar no GraficFlow com o e-mail e a senha configurados em DEV_ADMIN_PASSWORD.",
     },
     null,
     2,
