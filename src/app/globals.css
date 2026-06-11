@@ -8424,38 +8424,6 @@ textarea:focus {
   width: min(590px, calc(100% - 60px));
 }
 
-.auth-top-actions {
-  position: absolute;
-  top: 22px;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.auth-icon-control,
-.auth-language-control {
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #dfe5ef;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #263858;
-  cursor: pointer;
-}
-
-.auth-icon-control {
-  width: 36px;
-}
-
-.auth-language-control {
-  gap: 10px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
 .login-screen .auth-copy {
   gap: 8px;
   margin: 0 0 10px;
@@ -8607,7 +8575,6 @@ textarea:focus {
     row-gap: 14px;
   }
 
-  .login-screen .auth-panel.is-signup .auth-top-actions,
   .login-screen .auth-panel.is-signup .auth-copy,
   .login-screen .auth-panel.is-signup .auth-options,
   .login-screen .auth-panel.is-signup .auth-feedback,
@@ -8658,12 +8625,6 @@ textarea:focus {
 
   .auth-visual-copy h2 {
     font-size: 20px;
-  }
-
-  .auth-top-actions {
-    position: static;
-    justify-content: flex-end;
-    margin-bottom: 10px;
   }
 
   .login-screen .auth-panel,

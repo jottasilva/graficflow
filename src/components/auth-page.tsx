@@ -4,16 +4,13 @@ import { graphflowApi } from "@/lib/graphflow-api";
 import {
   ArrowUpRight,
   Check,
-  ChevronDown,
   Clock3,
   Eye,
   EyeOff,
-  Globe2,
   LockKeyhole,
   Mail,
   Send,
   ShieldCheck,
-  Sun,
   TrendingUp,
   UserPlus,
   type LucideIcon,
@@ -135,17 +132,6 @@ export function AuthPage({
         </aside>
 
         <form className={`auth-panel ${isSignup ? "is-signup" : ""}`} onSubmit={handleSubmit}>
-          <div className="auth-top-actions" aria-label="Preferências da tela de acesso">
-            <button className="auth-icon-control" type="button" aria-label="Alternar tema">
-              <Sun size={19} />
-            </button>
-            <button className="auth-language-control" type="button" aria-label="Idioma">
-              <Globe2 size={19} />
-              PT-BR
-              <ChevronDown size={16} />
-            </button>
-          </div>
-
           <div className="auth-copy">
             <span className="auth-secure-badge">
               <ShieldCheck size={17} />
