@@ -8310,7 +8310,7 @@ textarea:focus {
 }
 
 .login-screen .auth-visual-logo {
-  width: 82px;
+  width: min(220px, 78%);
   height: auto;
   object-fit: contain;
 }

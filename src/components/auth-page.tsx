@@ -21,7 +21,7 @@ import {
 import Image from "next/image";
 import { useState, type FormEvent } from "react";
 
-const GRAPHFLOW_MARK_SRC = "/assets/graphflow-mark-transparent.png";
+const GRAPHFLOW_MARK_SRC = "/assets/graphflow-login-logo.png";
 
 type AuthMode = "login" | "signup" | "recover";
 
@@ -107,14 +107,11 @@ export function AuthPage({
               <Image
                 src={GRAPHFLOW_MARK_SRC}
                 alt="GraficFlow"
-                width={146}
-                height={117}
+                width={944}
+                height={622}
                 className="auth-visual-logo"
                 priority
               />
-              <span className="auth-visual-brand" aria-hidden="true">
-                Grafic<span>Flow</span>
-              </span>
             </div>
 
             <div className="auth-visual-copy">
