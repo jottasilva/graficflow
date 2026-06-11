@@ -4993,6 +4993,14 @@ function ClientsView({
   const pageCount = Math.max(1, Math.ceil(filteredClients.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   const paginatedClients = filteredClients.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const clientStatusFilterLabel =
+    clientStatusFilter === "all" ? "Todos os status" : clientStatusFilter === "Ativo" ? "Ativos" : clientStatusFilter;
+  const clientTypeFilterLabel =
+    clientTypeFilter === "all"
+      ? "PF e PJ"
+      : clientTypeFilter === "PF"
+        ? "Pessoa física"
+        : "Pessoa jurídica";
 
   return (
     <section className="clients-reference-page table-card">
@@ -5021,9 +5029,10 @@ function ClientsView({
         </label>
 
         <div className="clients-toolbar-actions">
-          <label className="filter-select-control">
+          <label className="filter-select-control client-filter-select">
             <Funnel size={17} />
             <span className="sr-only">Filtrar status do cliente</span>
+            <span className="filter-select-value">{clientStatusFilterLabel}</span>
             <select
               aria-label="Filtrar status do cliente"
               value={clientStatusFilter}
@@ -5039,9 +5048,10 @@ function ClientsView({
             </select>
             <ChevronDown size={15} />
           </label>
-          <label className="filter-select-control">
+          <label className="filter-select-control client-filter-select">
             <Building2 size={17} />
             <span className="sr-only">Filtrar tipo do cliente</span>
+            <span className="filter-select-value">{clientTypeFilterLabel}</span>
             <select
               aria-label="Filtrar tipo do cliente"
               value={clientTypeFilter}
