@@ -4851,7 +4851,7 @@ input[type="range"] {
 
 .sector-card.reference-sector-card {
   display: flex;
-  min-height: 588px;
+  min-height: 548px;
   flex-direction: column;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -4881,8 +4881,8 @@ input[type="range"] {
 
 .sector-main-row {
   justify-content: space-between;
-  gap: 14px;
-  margin-top: 28px;
+  gap: 12px;
+  margin-top: 18px;
 }
 
 .sector-orders-count {
@@ -4917,8 +4917,8 @@ input[type="range"] {
 
 .capacity-ring {
   display: grid;
-  width: 96px;
-  height: 96px;
+  width: 82px;
+  height: 82px;
   place-items: center;
   flex: 0 0 auto;
   border-radius: 999px;
@@ -4926,52 +4926,55 @@ input[type="range"] {
 
 .capacity-ring > span {
   display: grid;
-  width: 70px;
-  height: 70px;
+  width: 60px;
+  height: 60px;
+  align-content: center;
+  justify-items: center;
+  gap: 1px;
   place-items: center;
   border-radius: 999px;
   background: var(--panel);
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.1;
+  font-size: 9px;
+  line-height: 1;
   text-align: center;
 }
 
 .capacity-ring strong {
   display: block;
   color: var(--foreground);
-  font-size: 18px;
-  line-height: 1;
+  font-size: 15px;
+  line-height: 0.95;
 }
 
 .sector-card .progress-bar {
-  height: 8px;
-  margin: 18px 0 20px;
+  height: 7px;
+  margin: 10px 0 12px;
 }
 
 .sector-metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 8px;
 }
 
 .sector-metric-grid > span {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr);
   grid-template-rows: auto auto;
   align-items: center;
-  min-height: 78px;
+  min-height: 60px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--muted);
   font-size: 12px;
-  padding: 12px;
+  padding: 9px;
 }
 
 .sector-metric-grid i {
   grid-row: 1 / 3;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   background: color-mix(in srgb, var(--sector-tone) 10%, var(--panel-2));
   color: var(--sector-tone);
   font-style: normal;
@@ -4979,16 +4982,16 @@ input[type="range"] {
 
 .sector-metric-grid strong {
   color: var(--foreground);
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
 }
 
 .linked-products {
   display: flex;
-  min-height: 190px;
+  min-height: 150px;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 24px;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .linked-products > strong {

@@ -3633,6 +3633,8 @@ export function GraphFlowApp() {
           {view === "sectors" ? (
             <SectorsView
               sectors={sectors}
+              orders={orders}
+              machines={machines}
               products={products}
               onViewChange={setView}
               onUpdateSector={updateSector}
@@ -6940,6 +6942,38 @@ function machineHourMetrics(machine: Machine, orders: Order[]) {
   };
 }
 
+function sameProductionSector(left: string | undefined, right: string | undefined) {
+  return normalizeText(left ?? "").trim() === normalizeText(right ?? "").trim();
+}
+
+function clampedPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)));
+}
+
+function sectorLiveMetrics(sector: Sector, orders: Order[], machines: Machine[], products: Product[]) {
+  const sectorOrders = orders.filter(
+    (order) => order.stageId === sector.id || sameProductionSector(order.sector, sector.name),
+  );
+  const activeOrders = sectorOrders.filter((order) => order.status !== "delivered");
+  const deliveredOrders = sectorOrders.length - activeOrders.length;
+  const sectorMachines = machines.filter((machine) => sameProductionSector(machine.sector, sector.name));
+  const linkedProducts = products.filter((product) => sameProductionSector(product.sector, sector.name));
+  const machineCapacity = sectorMachines.length
+    ? clampedPercent(
+        sectorMachines.reduce((total, machine) => total + clampedPercent(machine.utilization), 0) /
+          sectorMachines.length,
+      )
+    : undefined;
+
+  return {
+    activeOrders,
+    deliveredOrders,
+    linkedProducts,
+    machineCount: sectorMachines.length,
+    capacity: machineCapacity ?? clampedPercent(sector.capacity),
+  };
+}
+
 function MachinesView({
   machines,
   orders,
@@ -7159,6 +7193,8 @@ function MachinesView({
 
 function SectorsView({
   sectors,
+  orders,
+  machines,
   products,
   onViewChange,
   onUpdateSector,
@@ -7166,6 +7202,8 @@ function SectorsView({
   onLinkProduct,
 }: {
   sectors: Sector[];
+  orders: Order[];
+  machines: Machine[];
   products: Product[];
   onViewChange: (view: ViewKey) => void;
   onUpdateSector: (
@@ -7214,8 +7252,11 @@ function SectorsView({
 
       <div className="sector-management-grid">
         {sectors.map((sector, index) => {
-          const linkedProducts = products.filter((product) => product.sector === sector.name);
-          const availableProducts = products.filter((product) => product.sector !== sector.name);
+          const metrics = sectorLiveMetrics(sector, orders, machines, products);
+          const linkedProducts = metrics.linkedProducts;
+          const availableProducts = products.filter(
+            (product) => !sameProductionSector(product.sector, sector.name),
+          );
           const selectedProductId = linkDraft[sector.id] ?? availableProducts[0]?.id ?? "";
           const isEditing = editingSector?.id === sector.id;
           const tone = sectorTones[index % sectorTones.length];
@@ -7304,7 +7345,7 @@ function SectorsView({
                 <>
                   <div className="sector-main-row">
                     <div>
-                      <span className="sector-orders-count">{sector.orders} pedidos</span>
+                      <span className="sector-orders-count">{metrics.activeOrders.length} pedidos ativos</span>
                       <h3>{sector.name}</h3>
                       <p>Lead médio {sector.lead} · SLA {sector.sla} <i /></p>
                     </div>
@@ -7312,33 +7353,47 @@ function SectorsView({
                       className="capacity-ring"
                       style={
                         {
-                          background: `conic-gradient(${tone} ${sector.capacity * 3.6}deg, #e8ebf1 0deg)`,
+                          background: `conic-gradient(${tone} ${metrics.capacity * 3.6}deg, #e8ebf1 0deg)`,
                         } as CSSProperties
                       }
                     >
                       <span>
-                        <strong>{sector.capacity}%</strong>
+                        <strong>{metrics.capacity}%</strong>
                         capacidade
                       </span>
                     </div>
                   </div>
 
-                  <ProgressBar value={sector.capacity} color={tone} />
+                  <ProgressBar value={metrics.capacity} color={tone} />
 
                   <div className="sector-metric-grid">
                     <span>
                       <i>
                         <ClipboardList size={20} />
                       </i>
-                      <strong>{linkedProducts.length}</strong>
-                      cadastros
+                      <strong>{metrics.activeOrders.length}</strong>
+                      ativos
                     </span>
                     <span>
                       <i>
-                        <RefreshCw size={20} />
+                        <CheckCircle2 size={20} />
                       </i>
-                      <strong>{sector.sla || "0%"}</strong>
-                      SLA
+                      <strong>{metrics.deliveredOrders}</strong>
+                      entregues
+                    </span>
+                    <span>
+                      <i>
+                        <Cpu size={20} />
+                      </i>
+                      <strong>{metrics.machineCount}</strong>
+                      máquinas
+                    </span>
+                    <span>
+                      <i>
+                        <Package size={20} />
+                      </i>
+                      <strong>{linkedProducts.length}</strong>
+                      cadastros
                     </span>
                   </div>
 
