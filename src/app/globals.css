@@ -4287,6 +4287,293 @@ td strong {
   gap: 16px;
 }
 
+.document-detail {
+  gap: 14px;
+}
+
+.document-client-bar {
+  display: grid;
+  grid-template-columns: 0.55fr minmax(180px, 1.5fr) repeat(3, minmax(130px, 1fr)) auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.document-client-bar > div {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 4px;
+  min-height: 58px;
+  border-left: 1px solid var(--line-soft);
+  padding: 10px 12px;
+}
+
+.document-client-bar > div:first-child {
+  border-left: 0;
+}
+
+.document-client-bar span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.document-client-bar strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-client-actions {
+  grid-auto-flow: column;
+  align-items: center;
+  justify-content: end;
+  gap: 7px;
+  min-width: 142px;
+}
+
+.document-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  padding-top: 2px;
+}
+
+.document-detail-tabs button {
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
+.document-detail-tabs button.active {
+  border-color: var(--line);
+  background: var(--panel);
+  box-shadow: inset 0 -2px 0 var(--primary);
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.document-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 294px);
+  align-items: start;
+  gap: 18px;
+}
+
+.document-detail-main {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.document-finance-card,
+.document-summary-panel,
+.document-items-panel,
+.document-payments-list,
+.document-log-list,
+.document-empty-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.document-finance-card {
+  position: sticky;
+  top: 14px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.document-finance-card h3 {
+  margin: 0;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 12px;
+  font-size: 16px;
+}
+
+.document-finance-card > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.document-finance-card strong {
+  color: var(--foreground);
+}
+
+.document-finance-balance {
+  margin: 4px -8px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  padding: 11px 8px;
+}
+
+.document-summary-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.document-summary-head {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.document-summary-head > div,
+.document-delivery-box {
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 12px;
+}
+
+.document-summary-head span,
+.document-delivery-box p,
+.document-table span,
+.document-empty-panel span,
+.document-log-list small,
+.document-payments-list small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.document-summary-head strong,
+.document-delivery-box strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.document-delivery-box {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.document-delivery-box p {
+  margin: 4px 0 0;
+  line-height: 1.45;
+}
+
+.document-items-panel {
+  overflow: hidden;
+}
+
+.document-table {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(72px, 0.45fr) minmax(110px, 0.6fr) minmax(110px, 0.6fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  border-top: 1px solid var(--line-soft);
+  padding: 0 14px;
+}
+
+.document-table.head {
+  min-height: 40px;
+  border-top: 0;
+  background: var(--panel-2);
+}
+
+.document-table strong,
+.document-table span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-payments-list,
+.document-log-list {
+  overflow: hidden;
+}
+
+.document-payments-list article,
+.document-log-list article {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  border-top: 1px solid var(--line-soft);
+  padding: 12px 14px;
+}
+
+.document-payments-list article {
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+}
+
+.document-log-list article {
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+}
+
+.document-payments-list article:first-child,
+.document-log-list article:first-child {
+  border-top: 0;
+}
+
+.document-payments-list > article > span {
+  border-radius: 999px;
+  padding: 5px 8px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.document-payments-list .positive {
+  background: rgba(22, 185, 129, 0.12);
+  color: #0f8a4a;
+}
+
+.document-payments-list .warning {
+  background: rgba(251, 146, 12, 0.14);
+  color: #a15b00;
+}
+
+.document-log-list article > span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.document-log-list time {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.document-empty-panel {
+  display: grid;
+  min-height: 200px;
+  place-items: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.document-empty-panel svg {
+  color: var(--primary);
+}
+
 .order-receipt-card {
   display: grid;
   gap: 14px;
@@ -12068,6 +12355,39 @@ textarea:focus {
 }
 
 @media (max-width: 920px) {
+  .document-client-bar,
+  .document-detail-layout,
+  .document-summary-head {
+    grid-template-columns: 1fr;
+  }
+
+  .document-client-bar > div {
+    border-top: 1px solid var(--line-soft);
+    border-left: 0;
+  }
+
+  .document-client-bar > div:first-child {
+    border-top: 0;
+  }
+
+  .document-client-actions {
+    grid-auto-flow: column;
+    justify-content: flex-start;
+  }
+
+  .document-finance-card {
+    position: static;
+  }
+
+  .document-table {
+    grid-template-columns: minmax(0, 1fr) minmax(62px, auto);
+  }
+
+  .document-table span:nth-child(3),
+  .document-table strong:nth-child(4) {
+    text-align: right;
+  }
+
   .quote-header,
   .quote-title {
     align-items: flex-start;

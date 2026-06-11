@@ -120,6 +120,7 @@ const GRAPHFLOW_LOGO_SRC = "/assets/d2513524-f181-4a63-9fff-94a95de5aacf.png";
 type ModalMode =
   | "order"
   | "order-detail"
+  | "quote-detail"
   | "client"
   | "user"
   | "product"
@@ -1100,6 +1101,7 @@ export function GraphFlowApp() {
     defaultQuoteDraft([]),
   );
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
 
   const createNotification = useCallback((item: Omit<NotificationItem, "id" | "read" | "time">) => {
@@ -1490,7 +1492,7 @@ export function GraphFlowApp() {
   }, [sidebarCollapsed]);
 
   function openModal(mode: Exclude<ModalMode, null>) {
-    if (mode === "order-detail") {
+    if (mode === "order-detail" || mode === "quote-detail") {
       setModalMode(mode);
       return;
     }
@@ -1530,6 +1532,8 @@ export function GraphFlowApp() {
 
   function closeModal() {
     setModalMode(null);
+    setSelectedOrderId(null);
+    setSelectedQuoteId(null);
     setEditingProductId(null);
   }
 
@@ -2333,6 +2337,11 @@ export function GraphFlowApp() {
   function openOrderDetail(orderId: string) {
     setSelectedOrderId(orderId);
     setModalMode("order-detail");
+  }
+
+  function openQuoteDetail(quoteId: string) {
+    setSelectedQuoteId(quoteId);
+    setModalMode("quote-detail");
   }
 
   async function createProductionStage(name: string) {
@@ -3448,6 +3457,9 @@ export function GraphFlowApp() {
   const selectedOrder = selectedOrderId
     ? orders.find((order) => order.id === selectedOrderId)
     : undefined;
+  const selectedQuote = selectedQuoteId
+    ? quotes.find((quote) => quote.id === selectedQuoteId || quote.publicQuoteId === selectedQuoteId)
+    : undefined;
   const loggedUser = useMemo(
     () =>
       users.find(
@@ -3764,6 +3776,7 @@ export function GraphFlowApp() {
             <QuotesView
               quotes={quotes}
               onCreateQuote={() => openModal("quote")}
+              onOpenQuote={openQuoteDetail}
             />
           ) : null}
 
@@ -3813,6 +3826,8 @@ export function GraphFlowApp() {
         {modalMode === "order-detail" && selectedOrder ? (
           <OrderDetail
             order={selectedOrder}
+            clients={clients}
+            finance={finance}
             files={files}
             products={products}
             machines={machines}
@@ -3899,6 +3914,14 @@ export function GraphFlowApp() {
             draft={expenseDraft}
             onDraftChange={setExpenseDraft}
             onSubmit={createExpense}
+          />
+        ) : null}
+
+        {modalMode === "quote-detail" && selectedQuote ? (
+          <QuoteDetail
+            quote={selectedQuote}
+            clients={clients}
+            finance={finance}
           />
         ) : null}
 
@@ -7695,9 +7718,11 @@ function publicOrderLink(order: Order) {
 function QuotesView({
   quotes,
   onCreateQuote,
+  onOpenQuote,
 }: {
   quotes: Quote[];
   onCreateQuote: () => void;
+  onOpenQuote: (quoteId: string) => void;
 }) {
   const quotesPageSize = 10;
   const [quotePage, setQuotePage] = useState(1);
@@ -7747,7 +7772,19 @@ function QuotesView({
                 const publicLink = publicQuoteLink(quote);
 
                 return (
-                  <article className="quote-created-row" key={quote.id}>
+                  <article
+                    className="quote-created-row clickable-row"
+                    key={quote.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onOpenQuote(quote.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onOpenQuote(quote.id);
+                      }
+                    }}
+                  >
                     <div>
                       <strong>{quote.id}</strong>
                       <span>{quote.customerName}</span>
@@ -7758,14 +7795,23 @@ function QuotesView({
                     <div className="quote-created-actions">
                       {publicLink ? (
                         <>
-                          <a className="ghost-button" href={publicLink} target="_blank" rel="noreferrer">
+                          <a
+                            className="ghost-button"
+                            href={publicLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                          >
                             Abrir
                           </a>
                           <button
                             className="icon-button"
                             type="button"
                             title="Copiar link público"
-                            onClick={() => void navigator.clipboard?.writeText(publicLink)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void navigator.clipboard?.writeText(publicLink);
+                            }}
                           >
                             <Link2 size={16} />
                           </button>
@@ -11003,8 +11049,136 @@ function orderReceiptHtml(order: Order, artFiles: OrderArtFile[]) {
     </html>`;
 }
 
+type DocumentDetailTab = "summary" | "items" | "payments" | "log";
+
+type DocumentDetailTabItem = {
+  id: DocumentDetailTab;
+  label: string;
+};
+
+function DetailTabs({
+  tabs,
+  activeTab,
+  onChange,
+}: {
+  tabs: DocumentDetailTabItem[];
+  activeTab: DocumentDetailTab;
+  onChange: (tab: DocumentDetailTab) => void;
+}) {
+  return (
+    <nav className="document-detail-tabs" aria-label="Seções do documento">
+      {tabs.map((tab) => (
+        <button
+          className={activeTab === tab.id ? "active" : ""}
+          type="button"
+          key={tab.id}
+          onClick={() => onChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function documentPaymentEntries(finance: FinanceEntry[], references: Array<string | undefined>) {
+  const normalizedReferences = references.filter(Boolean).map((reference) => normalizeText(reference ?? ""));
+
+  return finance.filter((entry) => {
+    const reference = normalizeText(`${entry.referenceId ?? ""} ${entry.label} ${entry.notes ?? ""}`);
+    return normalizedReferences.some((item) => item && reference.includes(item));
+  });
+}
+
+function paidAmountFrom(entries: FinanceEntry[]) {
+  return entries
+    .filter((entry) => entry.status === "Recebido")
+    .reduce((sum, entry) => sum + entry.value, 0);
+}
+
+function DocumentFinanceSummary({
+  subtotal,
+  paymentEntries,
+  label = "Adicionar pagamento",
+}: {
+  subtotal: number;
+  paymentEntries: FinanceEntry[];
+  label?: string;
+}) {
+  const paidAmount = paidAmountFrom(paymentEntries);
+  const pendingAmount = Math.max(0, subtotal - paidAmount);
+
+  return (
+    <aside className="document-finance-card">
+      <h3>Resumo Financeiro</h3>
+      <div>
+        <span>Subtotal:</span>
+        <strong>{formatCurrency(subtotal)}</strong>
+      </div>
+      <div>
+        <span>Pago:</span>
+        <strong>{formatCurrency(paidAmount)}</strong>
+      </div>
+      <div className="document-finance-balance">
+        <span>Saldo devedor:</span>
+        <strong>{formatCurrency(pendingAmount)}</strong>
+      </div>
+      <button className="primary-button compact" type="button">
+        <CircleDollarSign size={16} />
+        {label}
+      </button>
+    </aside>
+  );
+}
+
+function PaymentsPanel({ entries }: { entries: FinanceEntry[] }) {
+  if (!entries.length) {
+    return (
+      <div className="document-empty-panel">
+        <CircleDollarSign size={30} />
+        <strong>Nenhum pagamento vinculado.</strong>
+        <span>Os lançamentos financeiros aparecerão aqui quando forem associados ao documento.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="document-payments-list">
+      {entries.map((entry) => (
+        <article key={entry.id}>
+          <span className={entry.status === "Recebido" ? "positive" : "warning"}>{entry.status}</span>
+          <div>
+            <strong>{entry.label}</strong>
+            <small>{entry.due ? `Vencimento: ${entry.due}` : "Sem vencimento"}</small>
+          </div>
+          <strong>{formatCurrency(entry.value)}</strong>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function LogPanel({ entries }: { entries: Array<{ title: string; detail: string; time: string }> }) {
+  return (
+    <div className="document-log-list">
+      {entries.map((entry) => (
+        <article key={`${entry.title}-${entry.time}`}>
+          <span />
+          <div>
+            <strong>{entry.title}</strong>
+            <small>{entry.detail}</small>
+          </div>
+          <time>{entry.time}</time>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function OrderDetail({
   order,
+  clients,
+  finance,
   files,
   products,
   machines,
@@ -11015,6 +11189,8 @@ function OrderDetail({
   onAddArtFile,
 }: {
   order: Order;
+  clients: Client[];
+  finance: FinanceEntry[];
   files: FileItem[];
   products: Product[];
   machines: Machine[];
@@ -11057,6 +11233,20 @@ function OrderDetail({
   ];
   const [shareFeedback, setShareFeedback] = useState("");
   const receiptNumber = order.number ?? order.id;
+  const [activeTab, setActiveTab] = useState<DocumentDetailTab>("summary");
+  const client = clients.find(
+    (item) => item.id === order.customer || item.name === order.customer || item.company === order.customer,
+  );
+  const paymentEntries = documentPaymentEntries(finance, [order.id, order.publicOrderId, order.number]);
+  const publicLink = publicOrderLink(order);
+  const orderLogEntries = [
+    { title: "Pedido criado", detail: `Registro ${receiptNumber} iniciado no sistema.`, time: order.delivery || "Hoje" },
+    { title: "Status atualizado", detail: statusMeta[order.status].label, time: `${order.progress}%` },
+    { title: "Produção", detail: `${order.sector} ${order.machineId ? `• ${order.machineId}` : ""}`, time: order.responsible || "Equipe" },
+    ...(order.publicLinkAcceptedAt
+      ? [{ title: "Link aceito", detail: "Cliente confirmou o pedido pelo link público.", time: order.publicLinkAcceptedAt }]
+      : []),
+  ];
 
   function handlePrintReceipt() {
     const receiptWindow = window.open("", "_blank", "width=920,height=760");
@@ -11094,6 +11284,61 @@ function OrderDetail({
   return (
     <div className="modal-form order-detail">
       <ModalHeader icon={ClipboardList} title={`Pedido ${order.number ?? order.id}`} subtitle="Detalhes do pedido em produção." />
+      <section className="document-client-bar">
+        <div>
+          <span>ID</span>
+          <strong>{receiptNumber}</strong>
+        </div>
+        <div>
+          <span>Cliente</span>
+          <strong>{client?.company ?? order.customer}</strong>
+        </div>
+        <div>
+          <span>Documento</span>
+          <strong>{client?.document || "Não informado"}</strong>
+        </div>
+        <div>
+          <span>Telefone</span>
+          <strong>{client?.phone || client?.whatsapp || "Não informado"}</strong>
+        </div>
+        <div>
+          <span>E-mail</span>
+          <strong>{client?.email || "Não informado"}</strong>
+        </div>
+        <div className="document-client-actions">
+          <button className="icon-button" type="button" title="Enviar e-mail" disabled={!client?.email}>
+            <Mail size={16} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title="Copiar link público"
+            disabled={!publicLink}
+            onClick={() => publicLink && void navigator.clipboard?.writeText(publicLink)}
+          >
+            <Link2 size={16} />
+          </button>
+          <button className="icon-button" type="button" title="Imprimir" onClick={handlePrintReceipt}>
+            <Download size={16} />
+          </button>
+        </div>
+      </section>
+
+      <DetailTabs
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        tabs={[
+          { id: "summary", label: "Resumo" },
+          { id: "items", label: "Itens do Pedido" },
+          { id: "payments", label: "Pagamentos" },
+          { id: "log", label: "Log de acompanhamento" },
+        ]}
+      />
+
+      <div className="document-detail-layout">
+        <div className="document-detail-main">
+          {activeTab === "summary" ? (
+            <>
       <section className="order-receipt-card">
         <div className="order-receipt-top">
           <div>
@@ -11190,6 +11435,12 @@ function OrderDetail({
           ))}
         </div>
       ) : null}
+
+            </>
+          ) : null}
+
+          {activeTab === "items" ? (
+            <>
 
       <form
         className="advanced-order-form"
@@ -11326,6 +11577,155 @@ function OrderDetail({
             Anexar
           </button>
         </form>
+      </div>
+            </>
+          ) : null}
+
+          {activeTab === "payments" ? <PaymentsPanel entries={paymentEntries} /> : null}
+          {activeTab === "log" ? <LogPanel entries={orderLogEntries} /> : null}
+        </div>
+
+        <DocumentFinanceSummary subtotal={order.total} paymentEntries={paymentEntries} />
+      </div>
+    </div>
+  );
+}
+
+function QuoteDetail({
+  quote,
+  clients,
+  finance,
+}: {
+  quote: Quote;
+  clients: Client[];
+  finance: FinanceEntry[];
+}) {
+  const [activeTab, setActiveTab] = useState<DocumentDetailTab>("summary");
+  const client = clients.find((item) => item.id === quote.customerId);
+  const total = quoteTotal(quote);
+  const publicLink = publicQuoteLink(quote);
+  const paymentEntries = documentPaymentEntries(finance, [quote.id, quote.publicQuoteId]);
+  const quoteLogEntries = [
+    { title: "Orçamento criado", detail: `Proposta ${quote.id} registrada no sistema.`, time: quote.createdAt || "Hoje" },
+    { title: "Validade definida", detail: `Válido até ${formatDateShort(quote.validUntil)}`, time: quote.status },
+    ...(publicLink ? [{ title: "Link público gerado", detail: "Cliente pode visualizar e aceitar a proposta.", time: "Ativo" }] : []),
+    ...(quote.acceptedAt ? [{ title: "Orçamento aceito", detail: "Cliente confirmou a proposta pelo link público.", time: quote.acceptedAt }] : []),
+  ];
+
+  return (
+    <div className="modal-form quote-detail document-detail">
+      <ModalHeader icon={FileText} title={`Orçamento ${quote.id}`} subtitle="Detalhes comerciais, itens, pagamentos e acompanhamento." />
+
+      <section className="document-client-bar">
+        <div>
+          <span>ID</span>
+          <strong>{quote.id}</strong>
+        </div>
+        <div>
+          <span>Cliente</span>
+          <strong>{client?.company ?? quote.customerName}</strong>
+        </div>
+        <div>
+          <span>Documento</span>
+          <strong>{client?.document || "Não informado"}</strong>
+        </div>
+        <div>
+          <span>Telefone</span>
+          <strong>{client?.phone || client?.whatsapp || "Não informado"}</strong>
+        </div>
+        <div>
+          <span>E-mail</span>
+          <strong>{quote.customerEmail || client?.email || "Não informado"}</strong>
+        </div>
+        <div className="document-client-actions">
+          <button className="icon-button" type="button" title="Enviar e-mail" disabled={!quote.customerEmail && !client?.email}>
+            <Mail size={16} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title="Copiar link público"
+            disabled={!publicLink}
+            onClick={() => publicLink && void navigator.clipboard?.writeText(publicLink)}
+          >
+            <Link2 size={16} />
+          </button>
+          {publicLink ? (
+            <a className="icon-button" href={publicLink} target="_blank" rel="noreferrer" title="Abrir link público">
+              <ArrowUpRight size={16} />
+            </a>
+          ) : null}
+        </div>
+      </section>
+
+      <DetailTabs
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        tabs={[
+          { id: "summary", label: "Resumo" },
+          { id: "items", label: "Itens do Orçamento" },
+          { id: "payments", label: "Pagamentos" },
+          { id: "log", label: "Log de acompanhamento" },
+        ]}
+      />
+
+      <div className="document-detail-layout">
+        <div className="document-detail-main">
+          {activeTab === "summary" ? (
+            <section className="document-summary-panel">
+              <div className="document-summary-head">
+                <div>
+                  <span>Status</span>
+                  <strong>{quote.status}</strong>
+                </div>
+                <div>
+                  <span>Data</span>
+                  <strong>{quote.createdAt || "Não informado"}</strong>
+                </div>
+                <div>
+                  <span>Validade</span>
+                  <strong>{formatDateShort(quote.validUntil)}</strong>
+                </div>
+                <div>
+                  <span>Vendedor</span>
+                  <strong>{quote.responsible || "Equipe comercial"}</strong>
+                </div>
+              </div>
+
+              <div className="document-delivery-box">
+                <MapPin size={20} />
+                <div>
+                  <strong>Observações</strong>
+                  <p>{quote.notes || "Sem observações cadastradas para este orçamento."}</p>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "items" ? (
+            <section className="document-items-panel">
+              <div className="document-table head">
+                <span>Produto / Serviço</span>
+                <span>Qtd.</span>
+                <span>Valor Unit.</span>
+                <span>Total</span>
+              </div>
+              {quote.items.map((item) => (
+                <div className="document-table" key={item.id}>
+                  <strong>{item.productName}</strong>
+                  <span>{formatNumber(item.quantity)}</span>
+                  <span>{formatCurrency(item.unitPrice)}</span>
+                  <strong>{formatCurrency(item.total)}</strong>
+                </div>
+              ))}
+            </section>
+          ) : null}
+
+          {activeTab === "payments" ? <PaymentsPanel entries={paymentEntries} /> : null}
+          {activeTab === "log" ? <LogPanel entries={quoteLogEntries} /> : null}
+        </div>
+
+        <DocumentFinanceSummary subtotal={total} paymentEntries={paymentEntries} />
       </div>
     </div>
   );
@@ -11718,7 +12118,7 @@ function Modal({
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <button className="modal-scrim" type="button" aria-label="Fechar modal" onClick={onClose} />
       <div
-        className={`modal-panel${mode === "order" ? " modal-panel-order" : ""}${mode === "quote" ? " modal-panel-quote" : ""}`}
+        className={`modal-panel${mode === "order" ? " modal-panel-order" : ""}${mode === "quote" || mode === "quote-detail" || mode === "order-detail" ? " modal-panel-quote" : ""}`}
         ref={panelRef}
       >
         <button className="modal-close icon-button" type="button" aria-label="Fechar" title="Fechar" onClick={onClose}>
