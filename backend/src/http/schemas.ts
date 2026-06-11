@@ -700,6 +700,17 @@ export const acceptQuoteSchema = z.object({
     .optional(),
 });
 
+export const acceptOrderSchema = z.object({
+  orderId: idSchema,
+  token: z.string().min(32).max(240),
+  acceptedByName: z.string().trim().min(2).max(160),
+  acceptedByEmail: z.string().trim().email(),
+  acceptedIp: z
+    .string()
+    .regex(/^(([0-9]{1,3}\.){3}[0-9]{1,3}|[a-f0-9:]+)$/i)
+    .optional(),
+});
+
 export type CreateClientInput = z.infer<typeof createClientSchema>;
 export type UpdateClientInput = z.infer<typeof updateClientSchema>;
 export type CreateProductInput = z.infer<typeof createProductSchema>;
@@ -735,6 +746,7 @@ export type MoveOrderItemInput = z.infer<typeof moveOrderItemSchema>;
 export type CreateQuoteInput = z.infer<typeof createQuoteSchema>;
 export type UpdateQuoteInput = z.infer<typeof updateQuoteSchema>;
 export type AcceptQuoteInput = z.infer<typeof acceptQuoteSchema>;
+export type AcceptOrderInput = z.infer<typeof acceptOrderSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type RecoverPasswordInput = z.infer<typeof recoverPasswordSchema>;

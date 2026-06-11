@@ -32,6 +32,10 @@ type PublicTokenRow = {
   revokedAt: string | null;
 };
 
+function metadataObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 export class QuotesService {
   constructor(
     private readonly supabase: SupabaseServiceClient,
@@ -222,19 +226,38 @@ export class QuotesService {
   }
 
   async accept(input: AcceptQuoteInput) {
-    const publicToken = await this.verifyPublicToken(input.quoteId, input.token);
+    const publicToken = await this.verifyPublicToken(input.quoteId, input.token, { allowAccepted: true });
+    const current = await this.supabase
+      .from("quotes")
+      .select("*")
+      .eq("id", publicToken.quoteId)
+      .maybeSingle();
+
+    assertSupabaseOk(current.error, "buscar orcamento para aceite");
+    if (!current.data) throw notFound("Orcamento nao encontrado.");
+
+    if (publicToken.acceptedAt) {
+      return {
+        accepted: true,
+        acceptedAt: publicToken.acceptedAt,
+        quote: current.data,
+      };
+    }
+
     const now = new Date().toISOString();
+    const metadata = {
+      ...metadataObject(current.data.metadata),
+      acceptedAt: now,
+      acceptedByName: input.acceptedByName,
+      acceptedByEmail: input.acceptedByEmail,
+      acceptedIp: input.acceptedIp ?? null,
+    };
 
     const quote = await this.supabase
       .from("quotes")
       .update({
         status: "ACCEPTED",
-        metadata: {
-          acceptedAt: now,
-          acceptedByName: input.acceptedByName,
-          acceptedByEmail: input.acceptedByEmail,
-          acceptedIp: input.acceptedIp ?? null,
-        },
+        metadata,
         updatedAt: now,
       })
       .eq("id", publicToken.quoteId)
@@ -251,6 +274,7 @@ export class QuotesService {
 
     return {
       accepted: true,
+      acceptedAt: now,
       quote: quote.data,
     };
   }

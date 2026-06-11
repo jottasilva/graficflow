@@ -11342,6 +11342,17 @@ textarea:focus {
   padding: 14px;
 }
 
+.public-quote-accepted div {
+  display: grid;
+  gap: 3px;
+}
+
+.public-quote-accepted small {
+  color: #047857;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .public-quote-shell {
   width: min(100%, 1180px);
 }

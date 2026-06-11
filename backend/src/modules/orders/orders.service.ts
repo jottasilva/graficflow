@@ -1,14 +1,17 @@
+import { createHash } from "node:crypto";
+import type { Env } from "../../config/env.js";
 import type { AuthContext } from "../../http/middleware/auth.js";
 import { assertSectorAccess, assertTenantAccess, hasPermission } from "../../http/middleware/auth.js";
 import type {
+  AcceptOrderInput,
   CreateOrderInput,
   MoveOrderItemInput,
   UpdateOrderInput,
 } from "../../http/schemas.js";
-import { conflict, notFound } from "../../shared/errors/http-error.js";
+import { conflict, gone, notFound, unauthorized } from "../../shared/errors/http-error.js";
 import type { SupabaseServiceClient } from "../../shared/supabase/client.js";
 import { assertSupabaseOk } from "../../shared/supabase/result.js";
-import { DOCUMENT_NUMBER_MAX_ATTEMPTS, documentNumber, isDocumentNumberConflict, randomId } from "../../shared/utils/ids.js";
+import { DOCUMENT_NUMBER_MAX_ATTEMPTS, documentNumber, isDocumentNumberConflict, randomId, randomToken } from "../../shared/utils/ids.js";
 import { lineTotal, subtotal } from "../../shared/utils/money.js";
 import { stripUndefined } from "../../shared/utils/objects.js";
 
@@ -34,6 +37,20 @@ type UsageLogRow = {
   startTime: string;
 };
 
+type PublicOrderTokenRow = {
+  id: string;
+  orderId: string;
+  tenantId: string;
+  tokenHash: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+};
+
+function metadataObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 function statusPatch(current: OrderItemRow, input: MoveOrderItemInput) {
   const now = new Date().toISOString();
 
@@ -51,7 +68,10 @@ function statusPatch(current: OrderItemRow, input: MoveOrderItemInput) {
 }
 
 export class OrdersService {
-  constructor(private readonly supabase: SupabaseServiceClient) {}
+  constructor(
+    private readonly supabase: SupabaseServiceClient,
+    private readonly env: Env,
+  ) {}
 
   async list(input: OrderListInput, auth: AuthContext) {
     assertTenantAccess(auth, input.tenantId);
@@ -98,6 +118,8 @@ export class OrdersService {
     const now = new Date().toISOString();
     const orderId = randomId("ord");
     const total = subtotal(input.items);
+    const rawToken = randomToken();
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
 
     let orderData: Record<string, unknown> | null = null;
 
@@ -168,9 +190,26 @@ export class OrdersService {
     const itemResult = await this.supabase.from("order_items").insert(items).select("*");
     assertSupabaseOk(itemResult.error, "criar itens do pedido");
 
+    const tokenResult = await this.supabase
+      .from("order_public_tokens")
+      .insert({
+        id: randomId("otk"),
+        tenantId: input.tenantId,
+        orderId,
+        tokenHash: this.hashToken(rawToken),
+        expiresAt,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .select("id,expiresAt")
+      .single();
+    assertSupabaseOk(tokenResult.error, "criar link publico do pedido");
+
     return {
       ...orderData,
       order_items: itemResult.data ?? [],
+      publicLink: this.publicOrderLink(orderId, rawToken),
+      publicLinkExpiresAt: expiresAt,
     };
   }
 
@@ -187,6 +226,96 @@ export class OrdersService {
 
     assertSupabaseOk(result.error, "atualizar pedido");
     return result.data;
+  }
+
+  async getPublicOrder(orderId: string, token: string) {
+    const publicToken = await this.verifyPublicToken(orderId, token, { allowAccepted: true });
+
+    const order = await this.supabase
+      .from("orders")
+      .select("*,order_items(*)")
+      .eq("id", publicToken.orderId)
+      .maybeSingle();
+
+    assertSupabaseOk(order.error, "buscar pedido publico");
+    if (!order.data) throw notFound("Pedido nao encontrado.");
+
+    const [customer, responsibleUser, tenant] = await Promise.all([
+      this.supabase
+        .from("customers")
+        .select("id,name,companyName,email,phone,whatsapp,document,documentType,addressStreet,addressNumber,addressComplement,addressDistrict,addressCity,addressState,addressZip")
+        .eq("id", order.data.customerId)
+        .maybeSingle(),
+      order.data.userId
+        ? this.supabase.from("users").select("id,name,email,phone").eq("id", order.data.userId).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      this.supabase.from("tenants").select("id,name,slug").eq("id", publicToken.tenantId).maybeSingle(),
+    ]);
+    assertSupabaseOk(customer.error, "buscar cliente do pedido publico");
+    assertSupabaseOk(responsibleUser.error, "buscar responsavel do pedido publico");
+    assertSupabaseOk(tenant.error, "buscar empresa do pedido publico");
+
+    return {
+      ...order.data,
+      customer: customer.data ?? null,
+      responsibleUser: responsibleUser.data ?? null,
+      tenant: tenant.data ?? null,
+      publicLinkExpiresAt: publicToken.expiresAt,
+      publicLinkAcceptedAt: publicToken.acceptedAt,
+    };
+  }
+
+  async accept(input: AcceptOrderInput) {
+    const publicToken = await this.verifyPublicToken(input.orderId, input.token, { allowAccepted: true });
+    const current = await this.supabase
+      .from("orders")
+      .select("*")
+      .eq("id", publicToken.orderId)
+      .maybeSingle();
+
+    assertSupabaseOk(current.error, "buscar pedido para aceite");
+    if (!current.data) throw notFound("Pedido nao encontrado.");
+
+    if (publicToken.acceptedAt) {
+      return {
+        accepted: true,
+        acceptedAt: publicToken.acceptedAt,
+        order: current.data,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const metadata = {
+      ...metadataObject(current.data.metadata),
+      acceptedAt: now,
+      acceptedByName: input.acceptedByName,
+      acceptedByEmail: input.acceptedByEmail,
+      acceptedIp: input.acceptedIp ?? null,
+    };
+
+    const order = await this.supabase
+      .from("orders")
+      .update({
+        metadata,
+        updatedAt: now,
+      })
+      .eq("id", publicToken.orderId)
+      .select("*")
+      .single();
+
+    assertSupabaseOk(order.error, "aceitar pedido");
+
+    const tokenUpdate = await this.supabase
+      .from("order_public_tokens")
+      .update({ acceptedAt: now, updatedAt: now })
+      .eq("id", publicToken.id);
+    assertSupabaseOk(tokenUpdate.error, "registrar aceite do link de pedido");
+
+    return {
+      accepted: true,
+      acceptedAt: now,
+      order: order.data,
+    };
   }
 
   async kanban(tenantId: string, auth: AuthContext) {
@@ -279,6 +408,42 @@ export class OrdersService {
     assertSupabaseOk(result.error, "buscar pedido");
     if (!result.data) throw notFound("Pedido nao encontrado.");
     return result.data;
+  }
+
+  private async verifyPublicToken(
+    orderId: string,
+    token: string,
+    options: { allowAccepted?: boolean } = {},
+  ): Promise<PublicOrderTokenRow> {
+    const result = await this.supabase
+      .from("order_public_tokens")
+      .select("*")
+      .eq("orderId", orderId)
+      .eq("tokenHash", this.hashToken(token))
+      .is("revokedAt", null)
+      .maybeSingle<PublicOrderTokenRow>();
+
+    assertSupabaseOk(result.error, "validar link publico do pedido");
+    if (!result.data) throw unauthorized("Link de pedido invalido.");
+
+    if (result.data.acceptedAt && !options.allowAccepted) {
+      throw gone("Pedido ja foi aceito por este link.");
+    }
+
+    if (!result.data.acceptedAt && Date.parse(result.data.expiresAt) < Date.now()) {
+      throw gone("Link de pedido expirado.");
+    }
+
+    return result.data;
+  }
+
+  private hashToken(token: string): string {
+    return createHash("sha256").update(`${token}.${this.env.QUOTE_PUBLIC_TOKEN_PEPPER}`).digest("hex");
+  }
+
+  private publicOrderLink(orderId: string, token: string): string {
+    const base = this.env.PUBLIC_APP_URL.replace(/\/$/, "");
+    return `${base}/pedidos/${orderId}?token=${encodeURIComponent(token)}`;
   }
 
   private async syncMachineUsage(current: OrderItemRow, input: MoveOrderItemInput, auth: AuthContext) {

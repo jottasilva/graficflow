@@ -263,6 +263,9 @@ type OrderDto = {
   productionStatus: string | null;
   total: number | string | null;
   expectedDeliveryAt?: string | null;
+  publicLink?: string | null;
+  publicLinkExpiresAt?: string | null;
+  publicLinkAcceptedAt?: string | null;
   order_items?: OrderItemDto[];
 };
 
@@ -568,6 +571,11 @@ function mapOrder(order: OrderDto, clients: Client[], products: Product[], secto
   return {
     id: order.id,
     number: order.number ?? order.id,
+    publicOrderId: order.id,
+    publicToken: order.publicLink ?? "",
+    publicLink: order.publicLink ?? "",
+    publicLinkExpiresAt: order.publicLinkExpiresAt ?? undefined,
+    publicLinkAcceptedAt: order.publicLinkAcceptedAt ?? undefined,
     itemId: firstItem?.id,
     customer: customer?.name ?? order.customerId,
     product: product?.name ?? firstItem?.description ?? "",

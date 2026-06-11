@@ -47,6 +47,11 @@ export type OrderArtFile = {
 export type Order = {
   id: string;
   number?: string;
+  publicOrderId?: string;
+  publicToken?: string;
+  publicLink?: string;
+  publicLinkExpiresAt?: string;
+  publicLinkAcceptedAt?: string;
   itemId?: string;
   customer: string;
   product: string;

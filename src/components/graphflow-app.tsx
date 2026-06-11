@@ -541,32 +541,14 @@ const defaultOrderDraft = (products: Product[], clients: Client[]): NewOrderDraf
   orderNumber: "",
   orderDate: todayInputDate(),
   customerId: clients[0]?.id ?? "",
-  productId: products[0]?.id ?? "",
-  quantity: products[0]?.minOrderQty ?? 50,
+  productId: "",
+  quantity: 0,
   deliveryDate: dateInputAfterDays(7),
   notes: "",
-  items: products[0]
-    ? [
-        {
-          id: "order-item-1",
-          productId: products[0].id,
-          quantity: products[0].minOrderQty ?? 50,
-          note: "",
-          artFileName: "",
-          artFileUrl: "",
-        },
-      ]
-    : [],
+  items: [],
   artFileName: "",
   artFileUrl: "",
-  fractions: [
-    {
-      id: "fraction-1",
-      quantity: products[0]?.minOrderQty ?? 50,
-      color: firstProductColor(products[0]),
-      note: "Variação principal",
-    },
-  ],
+  fractions: [],
 });
 
 const defaultClientDraft: ClientDraft = {
@@ -1456,7 +1438,7 @@ export function GraphFlowApp() {
       setExpenseDraft(defaultExpenseDraft);
     }
     if (mode === "quote") {
-      setQuoteDraft(loadSavedQuoteDraft(clients) ?? defaultQuoteDraft(clients));
+      setQuoteDraft(defaultQuoteDraft(clients));
       setView("quotes");
     }
     if (mode === "file") {
@@ -1585,6 +1567,8 @@ export function GraphFlowApp() {
           title: "Novo pedido criado",
           message: `${nextOrder.number ?? nextOrder.id} para ${selectedClient.name} entrou em producao.`,
         });
+        setOrderDraft(defaultOrderDraft(products, clients));
+        window.localStorage.removeItem("graphflow.orderDraft.manual");
         setModalMode(null);
         setView("orders");
       } catch (error) {
@@ -1698,6 +1682,8 @@ export function GraphFlowApp() {
       title: "Novo pedido criado",
       message: `${nextOrder.id} para ${selectedClient.name} entrou em aprovação.`,
     });
+    setOrderDraft(defaultOrderDraft(products, clients));
+    window.localStorage.removeItem("graphflow.orderDraft.manual");
     setModalMode(null);
     setView("orders");
   }
@@ -3172,6 +3158,7 @@ export function GraphFlowApp() {
         if (status !== "Rascunho") {
           window.localStorage.removeItem(QUOTE_DRAFT_STORAGE_KEY);
         }
+        setQuoteDraft(defaultQuoteDraft(clients));
         setView("quotes");
         setModalMode(null);
       } catch (error) {
@@ -3212,6 +3199,7 @@ export function GraphFlowApp() {
     if (status !== "Rascunho") {
       window.localStorage.removeItem(QUOTE_DRAFT_STORAGE_KEY);
     }
+    setQuoteDraft(defaultQuoteDraft(clients));
     setView("quotes");
     setModalMode(null);
   }
@@ -4610,7 +4598,10 @@ function OrdersView({
               </tr>
             </thead>
             <tbody>
-              {visibleOrders.map((order) => (
+              {visibleOrders.map((order) => {
+                const publicLink = publicOrderLink(order);
+
+                return (
                 <tr
                   className="clickable-row order-table-row"
                   key={order.id}
@@ -4688,6 +4679,33 @@ function OrdersView({
                       >
                         <Check size={16} />
                       </button>
+                      {publicLink ? (
+                        <>
+                          <a
+                            className="icon-button"
+                            href={publicLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label={`Abrir link público do pedido ${order.number ?? order.id}`}
+                            title="Abrir link público"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <Eye size={16} />
+                          </a>
+                          <button
+                            className="icon-button"
+                            type="button"
+                            aria-label={`Copiar link público do pedido ${order.number ?? order.id}`}
+                            title="Copiar link público"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void navigator.clipboard?.writeText(publicLink);
+                            }}
+                          >
+                            <Link2 size={16} />
+                          </button>
+                        </>
+                      ) : null}
                       <button
                         className="icon-button ghost-dots"
                         type="button"
@@ -4700,7 +4718,8 @@ function OrdersView({
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -7429,6 +7448,28 @@ function publicQuoteLink(quote: Quote) {
 
   if (!token) return "";
   return `${window.location.origin}/orcamentos/${encodeURIComponent(quoteId)}?token=${encodeURIComponent(token)}`;
+}
+
+function publicOrderLink(order: Order) {
+  const source = order.publicLink || order.publicToken || "";
+  if (!source || typeof window === "undefined") return "";
+
+  let orderId = order.publicOrderId ?? order.id;
+  let token = source;
+
+  if (source.startsWith("http")) {
+    try {
+      const publicUrl = new URL(source);
+      token = publicUrl.searchParams.get("token") ?? "";
+      const [, routeOrderId] = publicUrl.pathname.match(/\/pedidos?\/([^/?#]+)/) ?? [];
+      orderId = routeOrderId ? decodeURIComponent(routeOrderId) : orderId;
+    } catch {
+      token = "";
+    }
+  }
+
+  if (!token) return "";
+  return `${window.location.origin}/pedidos/${encodeURIComponent(orderId)}?token=${encodeURIComponent(token)}`;
 }
 
 function QuotesView({

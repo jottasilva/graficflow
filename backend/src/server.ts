@@ -7,6 +7,7 @@ import { z } from "zod";
 import { createCorsOriginMatcher } from "./config/cors.js";
 import { loadEnv } from "./config/env.js";
 import {
+  acceptOrderSchema,
   acceptQuoteSchema,
   createFiscalDocumentSchema,
   createFileSchema,
@@ -93,7 +94,7 @@ const fiscalService = new FiscalService(supabase, auditService);
 const graphqlReadService = new GraphqlReadService(env);
 const inventoryService = new InventoryService(supabase);
 const machinesService = new MachinesService(supabase);
-const ordersService = new OrdersService(supabase);
+const ordersService = new OrdersService(supabase, env);
 const paymentsService = new PaymentsService(supabase, auditService);
 const productsService = new ProductsService(supabase);
 const productionService = new ProductionService(supabase, auditService);
@@ -993,6 +994,27 @@ app.patch("/api/order-items/:id/move", async (request) => {
   const params = z.object({ id: z.string().min(1) }).parse(request.params);
   const input = moveOrderItemSchema.parse(request.body);
   return ordersService.moveOrderItem(params.id, input, auth);
+});
+
+app.get("/public/orders/:orderId", async (request) => {
+  const input = z.object({
+    orderId: z.string().min(1),
+    token: z.string().min(32).max(240),
+  }).parse({
+    ...(request.params as object),
+    ...(request.query as object),
+  });
+
+  return ordersService.getPublicOrder(input.orderId, input.token);
+});
+
+app.post("/public/orders/:orderId/accept", async (request, reply) => {
+  const input = acceptOrderSchema.parse({
+    ...(request.body as object),
+    orderId: (request.params as { orderId: string }).orderId,
+  });
+  const acceptance = await ordersService.accept(input);
+  return reply.code(200).send(acceptance);
 });
 
 app.get("/api/quotes", async (request) => {
