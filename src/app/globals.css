@@ -249,6 +249,7 @@ button:disabled {
   justify-content: center;
   border: 0;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .search-select {
@@ -499,6 +500,7 @@ button:disabled {
   line-height: 1.15;
   text-align: center;
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .store-primary {
@@ -1883,15 +1885,61 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 9px;
+  min-width: max-content;
   border: 0;
   border-radius: 8px;
   cursor: pointer;
+  line-height: 1;
   text-decoration: none;
   transition:
     transform 160ms ease,
     background 160ms ease,
     border-color 160ms ease,
     box-shadow 160ms ease;
+  white-space: nowrap;
+}
+
+.icon-button svg,
+.action-button svg,
+.primary-button svg,
+.ghost-button svg {
+  flex: 0 0 auto;
+}
+
+.app-shell button {
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.app-shell button :where(span, strong, small, em) {
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.app-shell :where(
+  .primary-button,
+  .ghost-button,
+  .action-button,
+  .date-button,
+  .filter-select-control,
+  .topbar-overview-item,
+  .orders-page-number,
+  .support-header-button,
+  .support-quote-button,
+  .support-send-button,
+  .cashflow-export-button,
+  .quote-add-item,
+  .quote-inline-action,
+  .new-order-add-wide,
+  .new-order-clear,
+  .client-history-button,
+  .settings-reference-row,
+  .contacts-filter-button,
+  .finance-action-list button,
+  .support-quick-actions button,
+  .support-context-head button
+) {
+  white-space: nowrap;
 }
 
 .icon-button {
@@ -3004,8 +3052,11 @@ button:disabled {
 
 .quick-action strong {
   min-width: 0;
+  overflow: hidden;
   color: #344054;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dark .quick-action strong {
@@ -6244,6 +6295,7 @@ input[type="range"] {
   cursor: pointer;
   font-size: 13px;
   font-weight: 400;
+  white-space: nowrap;
 }
 
 .auth-mode-switch button.active {
@@ -6353,6 +6405,7 @@ input[type="range"] {
   cursor: pointer;
   font-size: 15px;
   padding: 0;
+  white-space: nowrap;
 }
 
 .auth-check span {
@@ -6381,6 +6434,7 @@ input[type="range"] {
   font-style: normal;
   padding: 0;
   text-decoration: underline;
+  white-space: nowrap;
 }
 
 .auth-submit {
@@ -6396,6 +6450,7 @@ input[type="range"] {
   cursor: pointer;
   font-size: 16px;
   font-weight: 420;
+  white-space: nowrap;
 }
 
 .auth-panel.is-signup .auth-copy {
@@ -8719,6 +8774,7 @@ textarea:focus {
   color: #263858;
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .auth-google-mark {
