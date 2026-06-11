@@ -10611,6 +10611,191 @@ textarea:focus {
   border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
 }
 
+.search-box,
+.products-search,
+.new-order-search,
+.contacts-search,
+.clients-search,
+.toolbar-search {
+  --search-height: 48px;
+  --search-icon-box: 32px;
+  --search-icon-left: 10px;
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: var(--search-height);
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--primary) 14%, var(--line));
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--primary) 3%, var(--panel)) 0%, var(--panel) 100%),
+    var(--panel);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.035);
+  color: var(--muted);
+  overflow: hidden;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.search-box::before,
+.products-search::before,
+.new-order-search::before,
+.contacts-search::before,
+.clients-search::before,
+.toolbar-search::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: var(--search-icon-left);
+  width: var(--search-icon-box);
+  height: var(--search-icon-box);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 9%, var(--panel-2));
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.search-box:focus-within,
+.products-search:focus-within,
+.new-order-search:focus-within,
+.contacts-search:focus-within,
+.clients-search:focus-within,
+.toolbar-search:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 52%, var(--line));
+  background: var(--panel);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.search-box svg,
+.products-search svg,
+.new-order-search svg,
+.contacts-search svg,
+.clients-search svg,
+.toolbar-search svg {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--search-icon-left) + 7px);
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  color: var(--primary);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.search-box input,
+.products-search input,
+.new-order-search input,
+.contacts-search input,
+.clients-search input,
+.toolbar-search input {
+  width: 100%;
+  height: 100%;
+  min-height: var(--search-height);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--foreground);
+  font-size: 14px;
+  outline: 0;
+  padding: 0 16px 0 calc(var(--search-icon-left) + var(--search-icon-box) + 12px);
+}
+
+.search-box input:focus,
+.products-search input:focus,
+.new-order-search input:focus,
+.contacts-search input:focus,
+.clients-search input:focus,
+.toolbar-search input:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.search-box input::placeholder,
+.products-search input::placeholder,
+.new-order-search input::placeholder,
+.contacts-search input::placeholder,
+.clients-search input::placeholder,
+.toolbar-search input::placeholder {
+  color: color-mix(in srgb, var(--muted) 74%, transparent);
+}
+
+.search-box {
+  --search-height: 46px;
+}
+
+.products-search {
+  width: min(360px, 100%);
+}
+
+.contacts-search,
+.clients-search {
+  --search-height: 52px;
+  --search-icon-box: 34px;
+}
+
+.toolbar-search {
+  width: min(420px, 100%);
+  min-width: min(360px, 100%);
+}
+
+.new-order-search {
+  --search-height: 44px;
+}
+
+.dark .search-box,
+.dark .products-search,
+.dark .new-order-search,
+.dark .contacts-search,
+.dark .clients-search,
+.dark .toolbar-search {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--primary) 8%, var(--panel)) 0%, var(--panel) 100%),
+    var(--panel);
+  box-shadow: none;
+}
+
+.dark .search-box::before,
+.dark .products-search::before,
+.dark .new-order-search::before,
+.dark .contacts-search::before,
+.dark .clients-search::before,
+.dark .toolbar-search::before {
+  background: color-mix(in srgb, var(--primary) 16%, var(--panel-2));
+}
+
+.store-search {
+  height: 50px;
+  grid-template-columns: minmax(0, 1fr) 124px 50px;
+  border-color: color-mix(in srgb, #5b45ff 16%, #dde3ef);
+  background:
+    linear-gradient(180deg, rgba(91, 69, 255, 0.03), rgba(255, 255, 255, 0)),
+    #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+.store-search input {
+  background: transparent;
+  font-size: 14px;
+}
+
+.store-search input::placeholder {
+  color: #8994a8;
+}
+
+.search-select {
+  background: rgba(91, 69, 255, 0.035);
+}
+
+.search-submit {
+  width: 50px;
+  height: 50px;
+}
+
 .pagination-row {
   display: flex;
   align-items: center;

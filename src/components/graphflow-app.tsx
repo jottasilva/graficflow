@@ -6755,6 +6755,7 @@ function InventoryView({
         <label className="toolbar-search">
           <Search size={16} />
           <input
+            type="search"
             value={search}
             placeholder="Buscar item, categoria ou unidade"
             onChange={(event) => {
@@ -8885,6 +8886,7 @@ function FilesView({
         <label className="toolbar-search">
           <Search size={16} />
           <input
+            type="search"
             value={search}
             placeholder="Buscar arquivo, vinculo ou responsavel"
             onChange={(event) => {
@@ -9599,6 +9601,7 @@ function OrderForm({
             <label className="new-order-search">
               <Search size={18} />
               <input
+                type="search"
                 value={productSearch}
                 placeholder="Buscar por nome ou código do item..."
                 onChange={(event) => setProductSearch(event.target.value)}
