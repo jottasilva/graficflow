@@ -8278,16 +8278,14 @@ textarea:focus {
 .login-screen .auth-visual {
   align-items: stretch;
   background:
-    linear-gradient(180deg, rgba(1, 7, 35, 0.18), rgba(1, 7, 35, 0.2)),
-    url("/assets/auth-left-wave-bg.png") center / cover no-repeat;
+    linear-gradient(180deg, rgba(1, 7, 35, 0.22), rgba(1, 7, 35, 0.42)),
+    url("/assets/login-left-bg-90.jpg") center / cover no-repeat;
   color: #ffffff;
   padding: 40px 34px;
 }
 
 .login-screen .auth-visual::before {
-  background:
-    linear-gradient(135deg, rgba(3, 8, 32, 0.42), rgba(5, 10, 42, 0.2) 48%, rgba(91, 69, 255, 0.16)),
-    radial-gradient(circle at 88% 88%, rgba(91, 69, 255, 0.24), transparent 34%);
+  background: linear-gradient(135deg, rgba(3, 8, 32, 0.34), rgba(5, 10, 42, 0.14) 52%, rgba(4, 10, 38, 0.3));
 }
 
 .login-screen .auth-visual-content {
