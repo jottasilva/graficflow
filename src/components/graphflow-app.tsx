@@ -869,7 +869,7 @@ const inventoryImages: Record<string, string> = {
 
 const viewCopy: Record<ViewKey, { title: string; eyebrow: string }> = {
   dashboard: {
-    title: "Olá, João! ðŸ‘‹",
+    title: "Olá, João! 👋",
     eyebrow: "Aqui está o resumo geral da sua gráfica hoje.",
   },
   orders: {
@@ -1764,7 +1764,7 @@ export function GraphFlowApp() {
           await graphflowApi.createFile({
             name: orderDraft.artFileName.trim(),
             type: "Arte",
-            linkedTo: `${nextOrder.number ?? nextOrder.id} Â· ${primaryProduct.name}`,
+            linkedTo: `${nextOrder.number ?? nextOrder.id} · ${primaryProduct.name}`,
             size: "arquivo externo",
           }).catch(() => null);
         }
@@ -3303,7 +3303,7 @@ export function GraphFlowApp() {
         const savedFile = await graphflowApi.createFile({
           name: input.name.trim(),
           type: "Arte",
-          linkedTo: `${order.number ?? order.id} Â· ${input.productName}`,
+          linkedTo: `${order.number ?? order.id} · ${input.productName}`,
           url: input.url.trim(),
           owner: order.responsible ?? "",
           notes: `Arte do pedido ${order.number ?? order.id}`,
@@ -5008,7 +5008,7 @@ function OrdersView({
                       </span>
                       <div>
                         <strong>{order.number ?? order.id}</strong>
-                        <small>{order.delivery} Â· 10:{String(Math.max(10, 35 - visibleOrders.indexOf(order) * 2)).padStart(2, "0")}</small>
+                        <small>{order.delivery} · 10:{String(Math.max(10, 35 - visibleOrders.indexOf(order) * 2)).padStart(2, "0")}</small>
                       </div>
                     </div>
                   </td>
@@ -5537,7 +5537,7 @@ function ClientsView({
 
       <div className="clients-pagination">
         <span>
-          Página {currentPage} de {pageCount} Â· {filteredClients.length} {filteredClients.length === 1 ? "cliente" : "clientes"}
+          Página {currentPage} de {pageCount} · {filteredClients.length} {filteredClients.length === 1 ? "cliente" : "clientes"}
         </span>
         <div>
           <button className="ghost-button" type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
@@ -5583,7 +5583,7 @@ function SupportView({
         product: conversationProduct,
         name: conversationClient?.name ?? order.customer,
         company: conversationClient?.company ?? order.customer,
-        preview: `${order.number ?? order.id} Â· ${order.product}`,
+        preview: `${order.number ?? order.id} · ${order.product}`,
         time: index === 0 ? "Agora" : `${9 + index}:3${index}`,
         unread: index === 0 ? 2 : 0,
       };
@@ -5645,8 +5645,8 @@ function SupportView({
   const orderValue = activeOrder?.total ?? product?.price ?? 0;
   const productName = product?.name ?? activeOrder?.product ?? "Panfleto A5";
   const productDetail = product
-    ? `${product.category} Â· minimo ${formatNumber(product.minOrderQty)} un`
-    : "4x4 cores Â· Couche 115g";
+    ? `${product.category} · minimo ${formatNumber(product.minOrderQty)} un`
+    : "4x4 cores · Couche 115g";
 
   return (
     <section className="support-page">
@@ -5763,7 +5763,7 @@ function SupportView({
                   <span>Orcamento {orderNumber}</span>
                   <strong>Pronto</strong>
                 </div>
-                <p>{formatNumber(activeOrder?.quantity ?? product?.minOrderQty ?? 1000)} unidades Â· {productName}</p>
+                <p>{formatNumber(activeOrder?.quantity ?? product?.minOrderQty ?? 1000)} unidades · {productName}</p>
                 <strong>{formatCurrency(orderValue)}</strong>
                 <button className="support-quote-button" type="button" onClick={onCreateQuote}>
                   Ver orcamento completo
@@ -6221,7 +6221,7 @@ function UsersView({
 
               <div className="contact-content">
                 <h3>{user.name}</h3>
-                <p>{userRoleLabel(user)} <span aria-hidden="true">â€¢</span> {organization}</p>
+                <p>{userRoleLabel(user)} <span aria-hidden="true">•</span> {organization}</p>
                 <div className="contact-line">
                   <span>
                     <Mail size={17} />
@@ -7005,7 +7005,7 @@ function CatalogView({
               </div>
 
               <h3>{product.name}</h3>
-              <p>{product.category} Â· {product.sector || "Sem setor"}</p>
+              <p>{product.category} · {product.sector || "Sem setor"}</p>
 
               <div className="catalog-product-metrics">
                 <span>
@@ -7182,7 +7182,7 @@ function InventoryView({
               <ProgressBar value={percent} color={low ? "#ee3045" : "#16b981"} />
             </div>
             <h3>{item.name}</h3>
-            <p>Ãšltima movimentação: {item.lastMove}</p>
+            <p>Última movimentação: {item.lastMove}</p>
             <div className="stock-number">
               <strong>{formatNumber(item.quantity)}</strong>
               <span>{item.unit}</span>
@@ -7287,7 +7287,7 @@ function InventoryView({
       </div>
       <div className="pagination-row">
         <span>
-          Pagina {currentPage} de {pageCount} Â· {filteredInventory.length} itens
+          Pagina {currentPage} de {pageCount} · {filteredInventory.length} itens
         </span>
         <div>
           <button className="ghost-button compact" type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
@@ -7742,7 +7742,7 @@ function SectorsView({
                     <div>
                       <span className="sector-orders-count">{metrics.activeOrders.length} pedidos ativos</span>
                       <h3>{sector.name}</h3>
-                      <p>Lead médio {sector.lead} Â· SLA {sector.sla} <i /></p>
+                      <p>Lead médio {sector.lead} · SLA {sector.sla} <i /></p>
                     </div>
                     <div
                       className="capacity-ring"
@@ -7966,7 +7966,7 @@ function QuotesView({
             <h2>Orçamentos criados</h2>
             <p>
               {quotes.length
-                ? `${quotes.length} registros salvos â€¢ exibindo ${visibleQuoteStart}-${visibleQuoteEnd}`
+                ? `${quotes.length} registros salvos • exibindo ${visibleQuoteStart}-${visibleQuoteEnd}`
                 : "Nenhum orçamento criado ainda"}
             </p>
           </div>
@@ -8272,7 +8272,7 @@ function QuoteEditor({
                     onChange={(event) => onDraftChange({ ...draft, paymentCondition: event.target.value })}
                   >
                     <option>50% entrada + 50% entrega</option>
-                    <option>Ã€ vista no Pix</option>
+                    <option>À vista no Pix</option>
                     <option>30/60 dias</option>
                     <option>Cartão em até 3x</option>
                   </select>
@@ -8329,7 +8329,7 @@ function QuoteEditor({
                     </div>
                     <div className="quote-description-cell">
                       {quoteItemDescription(item.productName).map((line) => (
-                        <span key={line}>â€¢ {line}</span>
+                        <span key={line}>• {line}</span>
                       ))}
                       {item.attachmentName && (
                         <span className="quote-item-attachment" style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px', color: 'var(--primary)', fontSize: '13px' }}>
@@ -8365,7 +8365,7 @@ function QuoteEditor({
                     />
                     <select className="quote-unit-select" defaultValue="un">
                       <option>un</option>
-                      <option>mÂ²</option>
+                      <option>m²</option>
                       <option>mil</option>
                     </select>
                     <input
@@ -8496,7 +8496,7 @@ function QuoteEditor({
 
           {lastQuote ? (
             <div className="quote-last-link">
-              <span>Ãšltimo orçamento</span>
+              <span>Último orçamento</span>
               <strong>{lastQuote.id}</strong>
               <small>{selectedClient?.company ?? lastQuote.customerName}</small>
             </div>
@@ -9199,7 +9199,7 @@ function ReportsView({
         <SectionCard title="Faturamento Mensal" action={<DownloadButton filename="faturamento-mensal.csv" content={monthlyReport} />}>
           <div className="revenue-title">
             <strong>{formatCurrency(totalRevenue)}</strong>
-            <span>Ticket médio {formatCurrency(averageTicket)} Â· lucro {formatCurrency(profit)}</span>
+            <span>Ticket médio {formatCurrency(averageTicket)} · lucro {formatCurrency(profit)}</span>
           </div>
           <AreaChart data={reportRevenueSeries} color="#4f46ff" />
           <div className="report-axis">
@@ -9339,7 +9339,7 @@ function FilesView({
             <div>
               <strong>{file.name}</strong>
               <span>
-                {file.type} Â· {file.linkedTo}
+                {file.type} · {file.linkedTo}
               </span>
             </div>
             <small className="file-meta">{file.owner || "Sem responsavel"} {file.notes ? `- ${file.notes}` : ""}</small>
@@ -10163,7 +10163,7 @@ function OrderForm({
                   />
                   <span>
                     <strong>{product.name}</strong>
-                    <small>{product.sku ?? product.id} Â· {formatCurrency(product.price)}</small>
+                    <small>{product.sku ?? product.id} · {formatCurrency(product.price)}</small>
                   </span>
                   <Plus size={16} />
                 </button>
@@ -10293,7 +10293,7 @@ function OrderForm({
               <div>
                 <span>Estabelecimento</span>
                 <p>GraphFlow Matriz</p>
-                <small>São Paulo Â· contato@graphflow.com.br</small>
+                <small>São Paulo · contato@graphflow.com.br</small>
               </div>
               <label className="new-order-final-client">
                 <span>Cliente</span>
@@ -10315,7 +10315,7 @@ function OrderForm({
                 {selectedItems.length ? (
                   selectedItems.map(({ item, product }) => (
                     <small key={item.id}>
-                      {product.name} Â· {formatNumber(item.quantity)} un Â· {formatCurrency(calculateOrderTotal(product, item.quantity))}
+                      {product.name} · {formatNumber(item.quantity)} un · {formatCurrency(calculateOrderTotal(product, item.quantity))}
                     </small>
                   ))
                 ) : (
@@ -11256,7 +11256,7 @@ function orderReceiptHtml(order: Order, artFiles: OrderArtFile[]) {
           <header>
             <div>
               <h1>Recibo do Pedido ${receiptNumber}</h1>
-              <p>GraphFlow Â· ${escapeHtml(new Date().toLocaleDateString("pt-BR"))}</p>
+              <p>GraphFlow · ${escapeHtml(new Date().toLocaleDateString("pt-BR"))}</p>
             </div>
             <span class="status">${escapeHtml(statusMeta[order.status].label)}</span>
           </header>
@@ -11482,7 +11482,7 @@ function OrderDetail({
   const orderLogEntries = [
     { title: "Pedido criado", detail: `Registro ${receiptNumber} iniciado no sistema.`, time: order.delivery || "Hoje" },
     { title: "Status atualizado", detail: statusMeta[order.status].label, time: `${order.progress}%` },
-    { title: "Produção", detail: `${order.sector} ${order.machineId ? `â€¢ ${order.machineId}` : ""}`, time: order.responsible || "Equipe" },
+    { title: "Produção", detail: `${order.sector} ${order.machineId ? `• ${order.machineId}` : ""}`, time: order.responsible || "Equipe" },
     ...(order.publicLinkAcceptedAt
       ? [{ title: "Link aceito", detail: "Cliente confirmou o pedido pelo link público.", time: order.publicLinkAcceptedAt }]
       : []),
@@ -11670,7 +11670,7 @@ function OrderDetail({
           <strong>Frações</strong>
           {order.fractions.map((fraction) => (
             <span key={fraction.id}>
-              {formatNumber(fraction.quantity)} un Â· {fraction.color || "Sem cor"} {fraction.note ? `Â· ${fraction.note}` : ""}
+              {formatNumber(fraction.quantity)} un · {fraction.color || "Sem cor"} {fraction.note ? `· ${fraction.note}` : ""}
             </span>
           ))}
         </div>
@@ -12230,7 +12230,7 @@ function FinanceLine({ entry, compact = false }: { entry: FinanceEntry; compact?
         {isMargin ? `${entry.value}%` : formatCurrency(entry.value)}
       </strong>
       {!compact ? <small className="finance-details">{details}{entry.notes ? ` - ${entry.notes}` : ""}</small> : null}
-      {!compact ? <small>{entry.status} Â· {entry.due}</small> : null}
+      {!compact ? <small>{entry.status} · {entry.due}</small> : null}
     </div>
   );
 }
