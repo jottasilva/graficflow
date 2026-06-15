@@ -108,6 +108,22 @@ describe("http schemas", () => {
 
     assert.equal(valid.unitType, "UN");
     assert.equal(valid.trackStock, true);
+
+    const validWithSkipFiscal = createProductSchema.parse({
+      tenantId: "graphflow-main",
+      sku: "SKU-001",
+      name: "Cartao de visita",
+      category: "Impressos",
+      priceCost: 10,
+      priceSale: 29.9,
+      attributes: {
+        commercialDescription: "Cartao couchê 300g",
+        gtin: "SEM GTIN",
+        skipFiscalData: true,
+      },
+    });
+
+    assert.equal(validWithSkipFiscal.attributes.skipFiscalData, true);
   });
 
   it("requires at least one order item and coerces item numbers", () => {

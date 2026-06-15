@@ -1,9 +1,10 @@
-import { DEFAULT_PRODUCT_COLORS } from "./graphflow-data";
+import { DEFAULT_PRODUCT_COLORS, defaultLandingPageConfig } from "./graphflow-data";
 import type {
   Client,
   FileItem,
   FinanceEntry,
   InventoryItem,
+  LandingPageConfig,
   Machine,
   NotificationItem,
   Order,
@@ -153,6 +154,12 @@ export type WorkspaceData = {
   files: FileItem[];
   notifications: NotificationItem[];
   users: UserAccount[];
+};
+
+type LandingPageResponse = {
+  tenantId: string;
+  config: LandingPageConfig | null;
+  updatedAt?: string | null;
 };
 
 type AuthUser = {
@@ -315,6 +322,27 @@ type NotificationDto = {
   read: boolean;
   createdAt?: string | null;
 };
+
+export type GraphflowValidationIssue = {
+  field: string;
+  message: string;
+};
+
+export class GraphflowApiError extends Error {
+  status: number;
+
+  code?: string;
+
+  issues: GraphflowValidationIssue[];
+
+  constructor(message: string, options: { status: number; code?: string; issues?: GraphflowValidationIssue[] }) {
+    super(message);
+    this.name = "GraphflowApiError";
+    this.status = options.status;
+    this.code = options.code;
+    this.issues = options.issues ?? [];
+  }
+}
 
 type UserDto = {
   id: string;
@@ -767,10 +795,11 @@ function productAttributes(input: Partial<Product>): Record<string, unknown> {
     isResale: input.isResale,
     internalNotes: input.internalNotes,
     saleBlocked: input.saleBlocked,
+    skipFiscalData: input.skipFiscalData,
   };
 
-  if (Object.prototype.hasOwnProperty.call(input, "fiscal")) {
-    attributes.fiscal = input.fiscal ?? null;
+  if (input.fiscal) {
+    attributes.fiscal = input.fiscal;
   }
 
   return attributes;
@@ -830,6 +859,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
+  if (init?.body && typeof init.body === "string") {
+    const parsed = JSON.parse(init.body);
+    if ("attributes" in parsed) {
+      console.log("[DEBUG request]", path, "attributes:", JSON.stringify(parsed.attributes)?.slice(0, 300));
+    }
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     credentials: "include",
@@ -838,7 +874,39 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.message ?? `Erro HTTP ${response.status}`);
+    const issues = [
+      ...(Array.isArray(payload?.issues) ? payload.issues : []),
+      ...(Array.isArray(payload?.details) ? payload.details : []),
+    ]
+      .map((issue) => {
+        if (typeof issue === "string") {
+          return { field: "", message: issue };
+        }
+        if (issue && typeof issue === "object") {
+          const maybeMessage = (issue as { message?: unknown }).message;
+          const path = (issue as { path?: unknown }).path;
+          const maybeField = Array.isArray(path) ? path[0] : undefined;
+          const field = typeof maybeField === "string" ? maybeField : "";
+          if (typeof maybeMessage === "string" && maybeMessage.trim()) {
+            return { field, message: maybeMessage };
+          }
+        }
+        return null;
+      })
+      .filter((issue): issue is GraphflowValidationIssue => Boolean(issue));
+
+    const baseMessage = typeof payload?.message === "string" && payload.message.trim() ? payload.message : `Erro HTTP ${response.status}`;
+    const message = issues.length
+      ? `${baseMessage}: ${issues
+          .slice(0, 3)
+          .map((issue) => (issue.field ? `${issue.field}: ${issue.message}` : issue.message))
+          .join("; ")}`
+      : baseMessage;
+    throw new GraphflowApiError(message, {
+      status: response.status,
+      code: typeof payload?.code === "string" ? payload.code : undefined,
+      issues,
+    });
   }
 
   return response.json() as Promise<T>;
@@ -944,6 +1012,24 @@ export const graphflowApi = {
       ...(range?.dateTo ? { dateTo: range.dateTo } : {}),
     });
     return request<ManagementReport>(`/api/reports/management?${params.toString()}`);
+  },
+
+  async getLandingPageConfig(): Promise<LandingPageConfig> {
+    const params = tenantParams();
+    const result = await request<LandingPageResponse>(`/api/landing-page?${params.toString()}`);
+    return result.config ?? defaultLandingPageConfig;
+  },
+
+  async updateLandingPageConfig(config: LandingPageConfig): Promise<LandingPageConfig> {
+    const result = await request<LandingPageResponse>("/api/landing-page", {
+      method: "PATCH",
+      body: JSON.stringify({
+        tenantId: GRAPHFLOW_TENANT_ID,
+        config,
+      }),
+    });
+
+    return result.config ?? defaultLandingPageConfig;
   },
 
   async listSuppliers(search = ""): Promise<SupplierRecord[]> {
@@ -1202,6 +1288,7 @@ export const graphflowApi = {
 
   async createProduct(input: Product, sectorId?: string): Promise<Product> {
     const attributes = productAttributes(input);
+    console.log("[DEBUG createProduct] attributes:", JSON.stringify(attributes)?.slice(0, 300));
     const product = await request<ProductDto>("/api/products", {
       method: "POST",
       body: JSON.stringify({

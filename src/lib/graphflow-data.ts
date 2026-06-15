@@ -7,6 +7,7 @@ export type ViewKey =
   | "support"
   | "products"
   | "catalog"
+  | "landing"
   | "inventory"
   | "machines"
   | "sectors"
@@ -177,6 +178,7 @@ export type Product = {
   storageLocation?: string;
   tracksBatch?: boolean;
   fiscal?: ProductFiscalData;
+  skipFiscalData?: boolean;
   isResale?: boolean;
   internalNotes?: string;
   leadTime: string;
@@ -219,6 +221,209 @@ export type InventoryItem = {
   lastMove: string;
 };
 
+export type LandingLink = {
+  label: string;
+  href: string;
+};
+
+export type LandingHeroSlide = {
+  id: string;
+  imageUrl: string;
+  alt: string;
+  active: boolean;
+};
+
+export type LandingFeature = {
+  id: string;
+  icon: "quality" | "delivery" | "support" | "payment" | "upload" | "settings" | "package" | "palette";
+  title: string;
+  text: string;
+  active: boolean;
+};
+
+export type LandingCategory = {
+  id: string;
+  title: string;
+  price: string;
+  imageUrl: string;
+  active: boolean;
+};
+
+export type LandingProductCard = {
+  id: string;
+  tag: string;
+  imageUrl: string;
+  title: string;
+  specs: string;
+  oldPrice: string;
+  price: string;
+  reviews: string;
+  active: boolean;
+};
+
+export type LandingBenefit = {
+  id: string;
+  label: string;
+  title: string;
+  text: string;
+  active: boolean;
+};
+
+export type LandingTestimonial = {
+  id: string;
+  name: string;
+  role: string;
+  text: string;
+  initials: string;
+  active: boolean;
+};
+
+export type LandingFooterColumn = {
+  id: string;
+  title: string;
+  items: string[];
+  active: boolean;
+};
+
+export type LandingPageConfig = {
+  brand: {
+    name: string;
+    tagline: string;
+    logoUrl: string;
+  };
+  topStrip: {
+    welcome: string;
+    phone: string;
+    email: string;
+    links: LandingLink[];
+  };
+  navigation: LandingLink[];
+  hero: {
+    titlePrefix: string;
+    titleHighlight: string;
+    description: string;
+    primaryCta: LandingLink;
+    secondaryCta: LandingLink;
+    slides: LandingHeroSlide[];
+    features: LandingFeature[];
+  };
+  process: LandingFeature[];
+  categories: LandingCategory[];
+  products: LandingProductCard[];
+  benefits: LandingBenefit[];
+  testimonials: LandingTestimonial[];
+  newsletter: {
+    title: string;
+    subtitle: string;
+    whatsapp: string;
+    message: string;
+  };
+  footer: {
+    description: string;
+    columns: LandingFooterColumn[];
+    copyright: string;
+    developer: string;
+  };
+  whatsappUrl: string;
+};
+
+export const defaultLandingPageConfig: LandingPageConfig = {
+  brand: {
+    name: "Grafica Exemplo",
+    tagline: "Impressao de qualidade",
+    logoUrl: "/assets/d2513524-f181-4a63-9fff-94a95de5aacf.png",
+  },
+  topStrip: {
+    welcome: "Bem-vindo a Grafica Exemplo!",
+    phone: "(11) 99999-9999",
+    email: "contato@graficaexemplo.com.br",
+    links: [
+      { label: "Sobre nos", href: "#sobre" },
+      { label: "Como funciona", href: "#como-funciona" },
+      { label: "Meus pedidos", href: "#pedidos" },
+      { label: "Fale conosco", href: "#contato" },
+    ],
+  },
+  navigation: [
+    { label: "Inicio", href: "#" },
+    { label: "Todos os Produtos", href: "#produtos" },
+    { label: "Personalizados", href: "#produtos" },
+    { label: "Promocoes", href: "#produtos" },
+    { label: "Novidades", href: "#produtos" },
+    { label: "Catalogo Online", href: "#produtos" },
+    { label: "Upload de Arte", href: "#produtos" },
+  ],
+  hero: {
+    titlePrefix: "Solucoes graficas",
+    titleHighlight: "para impulsionar\nseu negocio",
+    description: "Da criacao a impressao, entregamos qualidade, agilidade e acabamento impecavel.",
+    primaryCta: { label: "Conheca nossos produtos", href: "#produtos" },
+    secondaryCta: { label: "Fazer orcamento", href: "https://wa.me/5511999999999" },
+    slides: [
+      { id: "hero-design", imageUrl: "/assets/hero-design-studio.jpg", alt: "Estudio de design grafico", active: true },
+      { id: "hero-print", imageUrl: "/assets/hero-print-machine.jpg", alt: "Maquina de impressao", active: true },
+    ],
+    features: [
+      { id: "quality", icon: "quality", title: "Qualidade Garantida", text: "Materiais de primeira linha", active: true },
+      { id: "delivery", icon: "delivery", title: "Entrega Rapida", text: "Para todo o Brasil", active: true },
+      { id: "support", icon: "support", title: "Atendimento Especializado", text: "Suporte via WhatsApp", active: true },
+      { id: "payment", icon: "payment", title: "Pagamento Seguro", text: "Seus dados protegidos", active: true },
+    ],
+  },
+  process: [
+    { id: "upload", icon: "upload", title: "Envie sua arte", text: "Faca upload do seu arquivo nos formatos: PDF, CDR, AI, PSD, PNG", active: true },
+    { id: "customize", icon: "settings", title: "Personalize", text: "Escolha as opcoes do produto e personalize do seu jeito", active: true },
+    { id: "receive", icon: "package", title: "Receba em casa", text: "Entregamos para todo o Brasil com seguranca e agilidade", active: true },
+  ],
+  categories: [
+    { id: "business-cards", title: "Cartoes de Visita", price: "A partir de R$ 29,90", imageUrl: "/assets/category-business-cards.jpg", active: true },
+    { id: "folders", title: "Folders", price: "A partir de R$ 99,90", imageUrl: "/assets/category-folders.jpg", active: true },
+    { id: "banners", title: "Banners", price: "A partir de R$ 59,90", imageUrl: "/assets/category-banners.jpg", active: true },
+    { id: "stickers", title: "Adesivos", price: "A partir de R$ 49,90", imageUrl: "/assets/category-stickers.jpg", active: true },
+    { id: "invites", title: "Convites", price: "A partir de R$ 89,90", imageUrl: "/assets/category-invites.jpg", active: true },
+    { id: "gifts", title: "Brindes", price: "A partir de R$ 19,90", imageUrl: "/assets/category-mugs.jpg", active: true },
+    { id: "packages", title: "Embalagens", price: "A partir de R$ 129,90", imageUrl: "/assets/category-packages.jpg", active: true },
+    { id: "plates", title: "Placas", price: "A partir de R$ 69,90", imageUrl: "/assets/category-plates.jpg", active: true },
+  ],
+  products: [
+    { id: "card-300g", tag: "MAIS VENDIDO", imageUrl: "/assets/category-business-cards.jpg", title: "Cartao de Visita Couche 300g", specs: "4x0 cores - Verniz Total Frente", oldPrice: "", price: "R$ 29,90", reviews: "124", active: true },
+    { id: "folder-150g", tag: "15% OFF", imageUrl: "/assets/category-folders.jpg", title: "Folder Couche 150g", specs: "15x21cm - 4x4 cores - Verniz Total", oldPrice: "R$ 129,90", price: "R$ 109,90", reviews: "86", active: true },
+    { id: "sticker-round", tag: "NOVO", imageUrl: "/assets/category-stickers.jpg", title: "Adesivo Redondo", specs: "5x5cm - Vinil - 4x0 cores", oldPrice: "", price: "R$ 49,90", reviews: "53", active: true },
+    { id: "banner-440g", tag: "MAIS VENDIDO", imageUrl: "/assets/category-banners.jpg", title: "Banner Lona 440g", specs: "80x120cm - 4x0 cores", oldPrice: "", price: "R$ 59,90", reviews: "71", active: true },
+    { id: "mug-custom", tag: "10% OFF", imageUrl: "/assets/category-mugs.jpg", title: "Caneca Personalizada", specs: "Ceramica - 325ml - 4x0 cores", oldPrice: "R$ 39,90", price: "R$ 35,90", reviews: "37", active: true },
+    { id: "box-custom", tag: "NOVO", imageUrl: "/assets/category-packages.jpg", title: "Caixa Personalizada", specs: "18x18x10cm - Kraft - 4x0 cores", oldPrice: "", price: "R$ 129,90", reviews: "28", active: true },
+  ],
+  benefits: [
+    { id: "print-quality", label: "Qualidade", title: "Impressao de Qualidade", text: "Equipamentos modernos e materiais de alta performance para garantir acabamentos impecaveis e cores vibrantes.", active: true },
+    { id: "color-precision", label: "Precisao", title: "Cores Vivas e Precisao", text: "Tecnologia avancada de calibracao que garante fidelidade de cores e consistencia em todos os materiais.", active: true },
+    { id: "deadline", label: "Confianca", title: "Prazos que Voce Pode Confiar", text: "Producao agil e logistica eficiente para entregar seu pedido no prazo combinado.", active: true },
+    { id: "human-support", label: "Atendimento", title: "Atendimento Humanizado", text: "Nossa equipe esta pronta para atender sua necessidade e oferecer o melhor suporte do inicio ao fim do projeto.", active: true },
+  ],
+  testimonials: [
+    { id: "juliana", name: "Juliana Andrade", role: "Empresaria", text: "A qualidade dos materiais e impecavel! Atendimento rapido e entrega antes do prazo.", initials: "JA", active: true },
+    { id: "carlos", name: "Carlos Mendes", role: "Designer", text: "Ja sou cliente ha anos e nunca me decepcionei. Compromisso e qualidade definem a Grafica Exemplo.", initials: "CM", active: true },
+    { id: "fernanda", name: "Fernanda Lima", role: "Marketing", text: "Os melhores precos e a qualidade que meu negocio precisa. Parceria que so cresce!", initials: "FL", active: true },
+    { id: "ricardo", name: "Ricardo Souza", role: "Publicitario", text: "Facil de enviar a arte, acompanhar o pedido e o resultado e sempre perfeito!", initials: "RS", active: true },
+  ],
+  newsletter: {
+    title: "Receba novidades e promocoes exclusivas!",
+    subtitle: "Cadastre-se e ganhe 10% de desconto na sua primeira compra.",
+    whatsapp: "5511999999999",
+    message: "Ola! Quero receber novidades e promocoes exclusivas da Grafica Exemplo pelo WhatsApp.",
+  },
+  footer: {
+    description: "Solucoes graficas completas para impulsionar seu negocio com qualidade, agilidade e preco justo.",
+    columns: [
+      { id: "institutional", title: "Institucional", items: ["Sobre nos", "Como funciona", "Trabalhe conosco", "Politica de qualidade", "Sustentabilidade"], active: true },
+      { id: "help", title: "Ajuda", items: ["Duvidas frequentes", "Prazos e entregas", "Formas de pagamento", "Trocas e devolucoes", "Fale conosco"], active: true },
+      { id: "categories", title: "Categorias", items: ["Todos os produtos", "Cartoes de Visita", "Folders", "Banners", "Adesivos", "Ver todas categorias"], active: true },
+    ],
+    copyright: "© 2026 Grafica Exemplo - Todos os direitos reservados.",
+    developer: "Desenvolvido por Fluuid Automatize",
+  },
+  whatsappUrl: "https://wa.me/5511999999999",
+};
+
 export type QuoteStatus = "Rascunho" | "Enviado" | "Aceito" | "Expirado";
 
 export type QuoteItem = {
@@ -228,6 +433,8 @@ export type QuoteItem = {
   quantity: number;
   unitPrice: number;
   total: number;
+  attachmentUrl?: string;
+  attachmentName?: string;
 };
 
 export type Quote = {
@@ -286,6 +493,7 @@ export type NotificationItem = {
   time: string;
   tone: "danger" | "warning" | "info" | "success";
   read: boolean;
+  fields?: string[];
 };
 
 export type FileItem = {
@@ -309,6 +517,7 @@ export const navItems: Array<{ id: ViewKey; label: string; badge?: number }> = [
   { id: "support", label: "Atendimento" },
   { id: "products", label: "Produtos" },
   { id: "catalog", label: "Catálogo" },
+  { id: "landing", label: "Landing Page" },
   { id: "inventory", label: "Estoque" },
   { id: "machines", label: "Máquinas" },
   { id: "sectors", label: "Setores" },

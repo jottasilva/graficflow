@@ -105,13 +105,51 @@ const sectorsService = new SectorsService(supabase);
 const suppliersService = new SuppliersService(supabase, auditService);
 const usersService = new UsersService(supabase, env);
 
+const landingPageQuerySchema = z.object({
+  tenantId: z.string().min(1).max(120),
+});
+const landingPageUpdateSchema = z.object({
+  tenantId: z.string().min(1).max(120),
+  config: z.record(z.string(), z.unknown()),
+});
+
+function metadataObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+async function getTenantLandingConfig(tenantId: string) {
+  const result = await supabase
+    .from("tenants")
+    .select("id,metadata,updatedAt")
+    .eq("id", tenantId)
+    .maybeSingle<{ id: string; metadata: Record<string, unknown> | null; updatedAt: string | null }>();
+
+  assertSupabaseOk(result.error, "buscar configuracao da landing page");
+
+  return {
+    tenantId,
+    config: metadataObject(result.data?.metadata).landingPageConfig ?? null,
+    updatedAt: result.data?.updatedAt ?? null,
+  };
+}
+
 await app.register(helmet);
 await app.register(cookie);
 await app.register(multipart, {
+  addToBody: false,
   limits: {
     fileSize: UPLOAD_MAX_BYTES,
     files: 1,
   },
+});
+
+app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+  try {
+    const raw = typeof body === "string" ? body : String(body);
+    done(null, JSON.parse(raw));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
 });
 
 const isAllowedCorsOrigin = createCorsOriginMatcher(env);
@@ -238,6 +276,78 @@ app.setErrorHandler((error, _request, reply) => {
 
 app.get("/healthz", async () => ({ ok: true }));
 app.get("/readyz", async () => ({ ok: true, supabaseUrl: env.SUPABASE_URL }));
+
+app.get("/public/landing-page", async (request) => {
+  const input = landingPageQuerySchema.parse(request.query);
+  return getTenantLandingConfig(input.tenantId);
+});
+
+app.get("/api/landing-page", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "settings:read");
+  const input = landingPageQuerySchema.parse(request.query);
+  assertTenantAccess(auth, input.tenantId);
+  return getTenantLandingConfig(input.tenantId);
+});
+
+app.patch("/api/landing-page", async (request) => {
+  const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "settings:read");
+  const input = landingPageUpdateSchema.parse(request.body);
+  assertTenantAccess(auth, input.tenantId);
+
+  const current = await supabase
+    .from("tenants")
+    .select("id,name,slug,metadata")
+    .eq("id", input.tenantId)
+    .maybeSingle<{ id: string; name: string | null; slug: string | null; metadata: Record<string, unknown> | null }>();
+
+  assertSupabaseOk(current.error, "buscar tenant da landing page");
+
+  const now = new Date().toISOString();
+  const metadata = {
+    ...metadataObject(current.data?.metadata),
+    landingPageConfig: input.config,
+  };
+
+  const save = current.data
+    ? await supabase
+        .from("tenants")
+        .update({ metadata, updatedAt: now })
+        .eq("id", input.tenantId)
+        .select("id,metadata,updatedAt")
+        .single()
+    : await supabase
+        .from("tenants")
+        .insert({
+          id: input.tenantId,
+          name: input.tenantId,
+          slug: input.tenantId,
+          metadata,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .select("id,metadata,updatedAt")
+        .single();
+
+  assertSupabaseOk(save.error, "salvar configuracao da landing page");
+
+  await auditService.record({
+    tenantId: input.tenantId,
+    userId: auth.userId,
+    action: "landing_page.update",
+    entityType: "tenant",
+    entityId: input.tenantId,
+    before: current.data?.metadata ?? null,
+    after: metadata,
+  });
+
+  return {
+    tenantId: input.tenantId,
+    config: metadata.landingPageConfig,
+    updatedAt: (save.data as { updatedAt?: string | null } | null)?.updatedAt ?? now,
+  };
+});
 
 app.post("/api/auth/login", async (request, reply) => {
   const input = loginSchema.parse(request.body);
@@ -407,6 +517,7 @@ app.get("/api/products", async (request) => {
 app.post("/api/products", async (request, reply) => {
   const auth = await authProvider.requireAuth(request);
   assertPermission(auth, "products:write");
+  console.log("[DEBUG] request.body type:", typeof request.body, "attributes type:", typeof request.body?.attributes, "attributes value:", JSON.stringify(request.body?.attributes)?.slice(0, 200));
   const input = createProductSchema.parse(request.body);
   const product = await productsService.create(input, auth);
   return reply.code(201).send(product);

@@ -159,6 +159,7 @@ const productAttributesSchema = z
     isResale: z.boolean().optional(),
     internalNotes: z.string().trim().max(800).optional().or(z.literal("")),
     saleBlocked: z.boolean().optional(),
+    skipFiscalData: z.boolean().optional(),
   })
   .passthrough();
 
@@ -188,7 +189,7 @@ export const createProductSchema = z
     isFeatured: z.boolean().default(false),
   })
   .superRefine((input, context) => {
-    if (!input.attributes.fiscal) {
+    if (!input.attributes.skipFiscalData && !input.attributes.fiscal) {
       context.addIssue({ code: "custom", path: ["attributes", "fiscal"], message: "Dados fiscais sao obrigatorios para NF-e." });
     }
     if (!input.attributes.commercialDescription) {

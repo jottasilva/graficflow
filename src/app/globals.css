@@ -6121,10 +6121,34 @@ input[type="range"] {
   background: var(--panel);
   box-shadow: none;
   padding: 18px;
+  align-items: start;
 }
 
 .notification-row.read {
   opacity: 0.68;
+}
+
+.notification-fields,
+.toast-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.notification-field,
+.toast-field {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(103, 80, 164, 0.16);
+  background: rgba(103, 80, 164, 0.08);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .notification-page {
@@ -13123,4 +13147,96 @@ textarea:focus {
   display: block !important;
   flex: 0 0 auto !important;
   margin: 0 !important;
+}
+
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  min-width: 320px;
+  max-width: 440px;
+  pointer-events: auto;
+  animation: toast-in 0.25s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.toast-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toast-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.toast-message {
+  font-size: 0.8125rem;
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  border-radius: 6px;
+  margin: -2px;
+}
+
+.toast-close:hover {
+  background: var(--line);
+  color: var(--text);
+}
+
+.toast-success {
+  border-left: 4px solid #16a34a;
+}
+
+.toast-info {
+  border-left: 4px solid #2563eb;
+}
+
+.toast-warning {
+  border-left: 4px solid #d97706;
+}
+
+.toast-danger {
+  border-left: 4px solid #dc2626;
 }
