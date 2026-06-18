@@ -8,6 +8,7 @@ import {
   BookOpen,
   Boxes,
   Building2,
+  Calculator,
   CalendarDays,
   ChartNoAxesColumn,
   Check,
@@ -33,6 +34,7 @@ import {
   Home,
   Info,
   Layers3,
+  Receipt,
   LayoutGrid,
   Lightbulb,
   Link2,
@@ -67,6 +69,7 @@ import {
   UserPlus,
   UserCog,
   Users,
+  Wallet,
   WalletCards,
   Warehouse,
   Wrench,
@@ -89,7 +92,9 @@ import {
   QUOTE_ACCEPTANCE_KEY,
   statusMeta,
   sumFractions,
+  type ChatMessage,
   type Client,
+  type Conversation,
   type FileItem,
   type FinanceEntry,
   type Fraction,
@@ -111,9 +116,11 @@ import {
 import {
   graphflowApi,
   GraphflowApiError,
+  type AuditLogRecord,
   type DashboardOverview,
   type ManagementReport,
   type PaymentTransactionRecord,
+  type TenantRecord,
 } from "@/lib/graphflow-api";
 import { PERMISSION_LABELS } from "@/shared/permissions";
 import type { PermissionKey } from "@/shared/permissions";
@@ -134,6 +141,7 @@ const GRAPHFLOW_LOGO_SRC = "/assets/d2513524-f181-4a63-9fff-94a95de5aacf.png";
 type ModalMode =
   | "order"
   | "order-detail"
+  | "order-status"
   | "quote-detail"
   | "client"
   | "user"
@@ -879,7 +887,7 @@ const defaultExpenseDraft: ExpenseDraft = {
   due: "Hoje",
   status: "Pendente",
   category: "Operacional",
-  referenceType: "Geral",
+  referenceType: "general",
   referenceId: "",
   paymentMethod: "Pix",
   notes: "",
@@ -1215,6 +1223,7 @@ export function GraphFlowApp() {
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [dark, setDark] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [tenantName, setTenantName] = useState("GraphFlow");
   const [authUserId, setAuthUserId] = useState<string | null>(null);
   const [authSessionUser, setAuthSessionUser] = useState<AuthSessionUser | null>(null);
   const [authChecking, setAuthChecking] = useState(() => graphflowApi.enabled());
@@ -1365,6 +1374,9 @@ export function GraphFlowApp() {
         graphflowApi.dashboardOverview().catch(() => null),
         graphflowApi.managementReport().catch(() => null),
       ]);
+
+      const savedSettings: Record<string, string> = await graphflowApi.listSettings().catch(() => ({}));
+      if (savedSettings.tenant) setTenantName(savedSettings.tenant);
 
       setClients(workspace.clients);
       setUsers(workspace.users);
@@ -2461,28 +2473,59 @@ export function GraphFlowApp() {
     setFiles((current) => current.filter((item) => item.id !== fileId));
   }
 
-  async function updateOrderStatus(orderId: string) {
+  function openOrderStatusCard(orderId: string) {
+    setSelectedOrderId(orderId);
+    openModal("order-status");
+  }
+
+  async function saveOrderStatus(
+    orderId: string,
+    updates: {
+      status?: OrderStatus;
+      paymentStatus?: string;
+      deliveryDate?: string;
+      carrier?: string;
+      trackingCode?: string;
+      notes?: string;
+    },
+  ) {
     const order = orders.find((item) => item.id === orderId);
     if (!order) return;
 
-    const status = nextStatus[order.status];
-
     if (graphflowApi.enabled()) {
       try {
-        await graphflowApi.updateOrderStatus(orderId, status);
+        await graphflowApi.updateOrder(orderId, {
+          status: updates.status,
+          paymentStatus: updates.paymentStatus,
+          deliveryDate: updates.deliveryDate,
+          carrier: updates.carrier,
+          trackingCode: updates.trackingCode,
+          notes: updates.notes,
+        });
         setOrders((current) =>
           current.map((item) =>
             item.id === orderId
               ? {
                   ...item,
-                  status,
-                  stageId: undefined,
-                  progress: status === "delivered" ? 100 : Math.min(95, item.progress + 18),
+                  status: updates.status ?? item.status,
+                  paymentStatus: (updates.paymentStatus ?? item.paymentStatus) as Order["paymentStatus"],
+                  dueDate: updates.deliveryDate ?? item.dueDate,
+                  progress:
+                    updates.status === "delivered"
+                      ? 100
+                      : updates.status
+                        ? Math.min(95, item.progress + 18)
+                        : item.progress,
                 }
               : item,
           ),
         );
         await refreshWorkspace();
+        createNotification({
+          tone: "success",
+          title: "Pedido atualizado",
+          message: `Status: ${statusMeta[updates.status ?? order.status].label}`,
+        });
       } catch (error) {
         createNotification({
           tone: "danger",
@@ -2490,21 +2533,26 @@ export function GraphFlowApp() {
           message: error instanceof Error ? error.message : "Falha ao conectar com o backend.",
         });
       }
-      return;
+    } else {
+      setOrders((current) =>
+        current.map((item) =>
+          item.id === orderId
+            ? {
+                ...item,
+                status: updates.status ?? item.status,
+                paymentStatus: (updates.paymentStatus ?? item.paymentStatus) as Order["paymentStatus"],
+                dueDate: updates.deliveryDate ?? item.dueDate,
+                progress:
+                  updates.status === "delivered"
+                    ? 100
+                    : updates.status
+                      ? Math.min(95, item.progress + 18)
+                      : item.progress,
+              }
+            : item,
+        ),
+      );
     }
-
-    setOrders((current) =>
-      current.map((order) => {
-        if (order.id !== orderId) {
-          return order;
-        }
-
-        const status = nextStatus[order.status];
-        const progress = status === "delivered" ? 100 : Math.min(95, order.progress + 18);
-
-        return { ...order, status, stageId: undefined, progress };
-      }),
-    );
   }
 
   async function moveOrderToProductionStage(orderId: string, stageId: string) {
@@ -3797,6 +3845,7 @@ export function GraphFlowApp() {
         collapsed={sidebarCollapsed}
         unreadCount={unreadCount}
         user={sidebarUser}
+        tenantName={tenantName}
         onClose={() => setSidebarOpen(false)}
         onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
       />
@@ -3899,7 +3948,7 @@ export function GraphFlowApp() {
               orders={filteredOrders}
               onCreateOrder={() => openModal("order")}
               onOpenOrder={openOrderDetail}
-              onUpdateStatus={updateOrderStatus}
+              onUpdateStatus={openOrderStatusCard}
             />
           ) : null}
 
@@ -4068,7 +4117,7 @@ export function GraphFlowApp() {
                   createNotification({
                     title: "Erro ao vincular usuário",
                     message: error instanceof Error ? error.message : "Tente novamente.",
-                    tone: "error",
+                    tone: "danger",
                   });
                 }
               }}
@@ -4083,7 +4132,7 @@ export function GraphFlowApp() {
                   createNotification({
                     title: "Erro ao remover vínculo",
                     message: error instanceof Error ? error.message : "Tente novamente.",
-                    tone: "error",
+                    tone: "danger",
                   });
                 }
               }}
@@ -4146,6 +4195,13 @@ export function GraphFlowApp() {
       </main>
 
       <Modal mode={modalMode} onClose={closeModal}>
+        {modalMode === "order-status" && selectedOrder ? (
+          <OrderStatusCard
+            order={selectedOrder}
+            onSave={saveOrderStatus}
+            onClose={closeModal}
+          />
+        ) : null}
         {modalMode === "order-detail" && selectedOrder ? (
           <OrderDetail
             order={selectedOrder}
@@ -4159,20 +4215,19 @@ export function GraphFlowApp() {
             onUploadFile={uploadFile}
             onSave={saveOrderDetail}
             onAddArtFile={addOrderArtFile}
-            onAddPayment={async (amount, method) => {
+            onAddPayment={async (input) => {
               if (graphflowApi.enabled()) {
                 const savedEntry = await graphflowApi.createFinanceEntry({
                   label: `Pagamento - Pedido ${selectedOrder.number ?? selectedOrder.id}`,
-                  type: "Entrada",
-                  value: amount,
+                  type: "receivable",
+                  value: input.amount,
                   due: new Date().toISOString().split("T")[0],
                   status: "Recebido",
                   category: "Vendas",
                   referenceType: "order",
                   referenceId: selectedOrder.id,
-                  paymentMethod: method,
-                  notes: "",
-                  attachmentUrl: "",
+                  paymentMethod: input.method,
+                  notes: input.notes,
                 });
                 setFinance([...finance, savedEntry]);
               }
@@ -4263,6 +4318,7 @@ export function GraphFlowApp() {
           <QuoteDetail
             quote={selectedQuote}
             clients={clients}
+            users={users}
             finance={finance}
             onConvert={() => convertQuoteToOrder(selectedQuote)}
           />
@@ -4411,6 +4467,7 @@ function Sidebar({
   collapsed,
   unreadCount,
   user,
+  tenantName,
   onViewChange,
   onClose,
   onToggleCollapsed,
@@ -4420,6 +4477,7 @@ function Sidebar({
   collapsed: boolean;
   unreadCount: number;
   user: SidebarUserProfile;
+  tenantName: string;
   onViewChange: (view: ViewKey) => void;
   onClose: () => void;
   onToggleCollapsed: () => void;
@@ -4448,7 +4506,7 @@ function Sidebar({
     <>
       <aside className={`sidebar ${open ? "is-open" : ""} ${collapsed ? "is-collapsed" : ""}`}>
         <div className="sidebar-top">
-          <BrandBlock compact />
+          <BrandBlock compact tenantName={tenantName} />
           <button
             className="icon-button sidebar-collapse-button"
             type="button"
@@ -5194,8 +5252,14 @@ function OrdersView({
                   </td>
                   <td>
                     <div className="cell-stack order-product-cell">
-                      <span>{order.product}</span>
-                      <small>{formatNumber(order.quantity)} un</small>
+                      {(order.items && order.items.length > 1
+                        ? order.items
+                        : [{ id: order.id, productName: order.product, quantity: order.quantity }]
+                      ).map((item) => (
+                        <span key={item.id ?? item.productName} className="order-product-badge">
+                          {item.productName.split(" ")[0]}<span className="order-product-badge-qty">{formatNumber(item.quantity)}un</span>
+                        </span>
+                      ))}
                     </div>
                   </td>
                   <td>
@@ -5741,20 +5805,38 @@ function SupportView({
   onCreateQuote: () => void;
   onViewChange: (view: ViewKey) => void;
 }) {
-  const supportConversations = useMemo(() => {
+  const [remoteConversations, setRemoteConversations] = useState<Conversation[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState("");
+  const [inputText, setInputText] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!graphflowApi.enabled()) {
+      setLoading(false);
+      return;
+    }
+    graphflowApi.listConversations().then((data) => {
+      setRemoteConversations(data);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (!selectedConversationId || !graphflowApi.enabled()) return;
+    graphflowApi.listMessages(selectedConversationId).then(setMessages).catch(() => {});
+  }, [selectedConversationId]);
+
+  const fallbackConversations = useMemo(() => {
     const orderConversations = orders.slice(0, 8).map((order, index) => {
       const conversationClient = clients.find(
         (item) => item.name === order.customer || item.company === order.customer,
-      );
-      const conversationProduct = products.find(
-        (item) => item.id === order.productId || item.name === order.product,
       );
 
       return {
         id: `order-${order.id}`,
         client: conversationClient,
         order,
-        product: conversationProduct,
         name: conversationClient?.name ?? order.customer,
         company: conversationClient?.company ?? order.customer,
         preview: `${order.number ?? order.id} · ${order.product}`,
@@ -5763,17 +5845,16 @@ function SupportView({
       };
     });
 
-    const namesInOrders = new Set(orderConversations.map((conversation) => conversation.name));
+    const namesInOrders = new Set(orderConversations.map((c) => c.name));
     const clientConversations = clients
       .filter((item) => !namesInOrders.has(item.name))
       .slice(0, Math.max(0, 8 - orderConversations.length))
-      .map((conversationClient, index) => ({
-        id: `client-${conversationClient.id}`,
-        client: conversationClient,
+      .map((c, index) => ({
+        id: `client-${c.id}`,
+        client: c,
         order: undefined as Order | undefined,
-        product: products[index % Math.max(products.length, 1)],
-        name: conversationClient.name,
-        company: conversationClient.company,
+        name: c.name,
+        company: c.company,
         preview: "Aguardando retorno sobre orçamento",
         time: `${10 + index}:0${index}`,
         unread: !orderConversations.length && index === 0 ? 1 : 0,
@@ -5782,45 +5863,94 @@ function SupportView({
     const conversations = [...orderConversations, ...clientConversations];
     return conversations.length
       ? conversations
-      : [
-          {
-            id: "empty-support",
-            client: undefined,
-            order: undefined,
-            product: products[0],
-            name: "Novo cliente",
-            company: "Atendimento",
-            preview: "Inicie uma conversa pelo WhatsApp",
-            time: "Agora",
-            unread: 0,
-          },
-        ];
-  }, [clients, orders, products]);
-  const [selectedConversationId, setSelectedConversationId] = useState("");
+      : [{
+          id: "empty-support",
+          client: undefined,
+          order: undefined,
+          name: "Novo cliente",
+          company: "Atendimento",
+          preview: "Inicie uma conversa pelo WhatsApp",
+          time: "Agora",
+          unread: 0,
+        }];
+  }, [clients, orders]);
 
-  const activeConversation =
-    supportConversations.find((conversation) => conversation.id === selectedConversationId) ??
-    supportConversations[0];
-  const activeOrder =
-    activeConversation?.order ?? orders.find((order) => !isClosedOrderStatus(order.status)) ?? orders[0];
-  const client =
-    activeConversation?.client ??
-    clients.find((item) => item.name === activeOrder?.customer || item.company === activeOrder?.customer) ??
-    clients[0];
-  const product =
-    activeConversation?.product ??
-    products.find((item) => item.id === activeOrder?.productId || item.name === activeOrder?.product) ??
-    products[0];
-  const relatedProducts = products
-    .filter((item) => item.id !== product?.id)
-    .slice(0, 4);
-  const firstName = activeConversation?.name?.split(" ")[0] ?? client?.name?.split(" ")[0] ?? "Cliente";
+  const apiEnabled = graphflowApi.enabled();
+
+  const displayConversations = useMemo(() => {
+    if (!apiEnabled) return fallbackConversations;
+    return remoteConversations.map((conv) => {
+      const c = conv.customer;
+      const o = conv.order;
+      return {
+        id: conv.id,
+        client: c ? { id: c.id, name: c.name, company: c.companyName, avatarUrl: c.avatarUrl, email: c.email, phone: c.phone, whatsapp: c.whatsapp } as Client : undefined,
+        order: o ? { id: o.id, number: o.number, status: o.status as OrderStatus, total: o.total } as unknown as Order : undefined,
+        name: c?.name ?? "Cliente",
+        company: c?.companyName ?? "",
+        preview: conv.subject ?? (o ? `${o.number ?? o.id}` : "Novo atendimento"),
+        time: conv.lastMessageAt ? formatTimeAgo(conv.lastMessageAt) : "",
+        unread: 0,
+      };
+    });
+  }, [apiEnabled, remoteConversations, fallbackConversations]);
+
+  async function handleSendMessage(event: FormEvent) {
+    event.preventDefault();
+    const text = inputText.trim();
+    if (!text) return;
+
+    if (apiEnabled && selectedConversationId) {
+      const msg = await graphflowApi.sendMessage(selectedConversationId, { content: text, tone: "agent" });
+      setMessages((prev) => [...prev, msg]);
+    } else {
+      setMessages((prev) => [...prev, {
+        id: `msg-${Date.now()}`,
+        conversationId: "local",
+        tenantId: "",
+        tone: "agent",
+        content: text,
+        createdAt: new Date().toISOString(),
+      }]);
+    }
+    setInputText("");
+  }
+
+  function openWhatsApp(phone?: string) {
+    const number = (phone || resolvedClient?.whatsapp || resolvedClient?.phone || "").replace(/\D/g, "");
+    if (number) {
+      window.open(`https://wa.me/55${number}`, "_blank", "noopener");
+    }
+  }
+
+  function formatTimeAgo(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "Agora";
+    if (mins < 60) return `${mins}min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(new Date(iso));
+  }
+
+  const activeConversation = displayConversations.find((c) => c.id === selectedConversationId) ?? displayConversations[0];
+  const activeOrder = activeConversation?.order ?? orders.find((o) => !isClosedOrderStatus(o.status)) ?? orders[0];
+  const resolvedClient = activeConversation?.client ?? clients.find((c) => c.name === activeOrder?.customer || c.company === activeOrder?.customer) ?? clients[0];
+  const resolvedProduct = activeOrder ? products.find((p) => p.id === activeOrder?.productId || p.name === activeOrder?.product) : (products[0] ?? undefined);
+  const relatedProducts = products.filter((p) => p.id !== resolvedProduct?.id).slice(0, 4);
+  const firstName = activeConversation?.name?.split(" ")[0] ?? resolvedClient?.name?.split(" ")[0] ?? "Cliente";
   const orderNumber = activeOrder?.number ?? activeOrder?.id ?? "#12458";
-  const orderValue = activeOrder?.total ?? product?.price ?? 0;
-  const productName = product?.name ?? activeOrder?.product ?? "Panfleto A5";
-  const productDetail = product
-    ? `${product.category} · minimo ${formatNumber(product.minOrderQty)} un`
-    : "4x4 cores · Couche 115g";
+  const orderValue = activeOrder?.total ?? resolvedProduct?.price ?? 0;
+  const productName = resolvedProduct?.name ?? activeOrder?.product ?? "Panfleto A5";
+  const productDetail = resolvedProduct ? `${resolvedProduct.category} · minimo ${formatNumber(resolvedProduct.minOrderQty)} un` : "4x4 cores · Couche 115g";
+
+  if (loading) {
+    return (
+      <section className="support-page" style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+        <span>Carregando atendimentos...</span>
+      </section>
+    );
+  }
 
   return (
     <section className="support-page">
@@ -5829,7 +5959,7 @@ function SupportView({
           <div className="support-conversations-head">
             <div>
               <strong>Conversas</strong>
-              <span>{supportConversations.length} atendimentos</span>
+              <span>{displayConversations.length} atendimentos</span>
             </div>
             <button type="button" aria-label="Nova conversa" title="Nova conversa" onClick={onCreateOrder}>
               <Plus size={16} />
@@ -5837,7 +5967,7 @@ function SupportView({
           </div>
 
           <div className="support-conversation-list">
-            {supportConversations.map((conversation) => (
+            {displayConversations.map((conversation) => (
               <button
                 className={`support-conversation-item ${activeConversation?.id === conversation.id ? "active" : ""}`}
                 key={conversation.id}
@@ -5856,7 +5986,7 @@ function SupportView({
                     <small>{conversation.time}</small>
                   </span>
                   <p>{conversation.preview}</p>
-                  <em>{conversation.order ? statusMeta[conversation.order.status].label : "Novo atendimento"}</em>
+                  <em>{conversation.order ? statusMeta[conversation.order.status]?.label ?? "Novo atendimento" : "Novo atendimento"}</em>
                 </div>
                 {conversation.unread ? <i>{conversation.unread}</i> : null}
               </button>
@@ -5889,88 +6019,82 @@ function SupportView({
           </header>
 
           <div className="support-chat-body">
-            <SupportChatMessage
-              avatarUrl={GRAPHFLOW_LOGO_SRC}
-              name="Grafica Exemplo"
-              time="10:20"
-              tone="agent"
-            >
-              Ola, {firstName}! Como podemos ajudar voce hoje?
-            </SupportChatMessage>
-
-            <SupportChatMessage
-              avatarUrl={client?.avatarUrl}
-              name={client?.name ?? "Cliente"}
-              time="10:31"
-              tone="customer"
-            >
-              Gostaria de fazer um orcamento de {formatNumber(activeOrder?.quantity ?? product?.minOrderQty ?? 1000)} unidades com acabamento frente e verso.
-            </SupportChatMessage>
-
-            <SupportChatMessage
-              avatarUrl={GRAPHFLOW_LOGO_SRC}
-              name="Grafica Exemplo"
-              time="10:32"
-              tone="agent"
-            >
-              Perfeito. Me informe o tamanho, o tipo de papel desejado e se a arte ja esta pronta.
-            </SupportChatMessage>
-
-            <SupportChatMessage
-              avatarUrl={client?.avatarUrl}
-              name={client?.name ?? "Cliente"}
-              time="10:34"
-              tone="customer"
-            >
-              Pode usar {productDetail}. Preciso receber com prazo curto e acompanhar o pedido.
-            </SupportChatMessage>
-
-            <SupportChatMessage
-              avatarUrl={GRAPHFLOW_LOGO_SRC}
-              name="Grafica Exemplo"
-              time="10:35"
-              tone="agent"
-            >
-              <span>Otimo. Ja vou preparar seu atendimento com base no pedido em aberto.</span>
-              <div className="support-quote-card">
-                <div>
-                  <span>Orcamento {orderNumber}</span>
-                  <strong>Pronto</strong>
-                </div>
-                <p>{formatNumber(activeOrder?.quantity ?? product?.minOrderQty ?? 1000)} unidades · {productName}</p>
-                <strong>{formatCurrency(orderValue)}</strong>
-                <button className="support-quote-button" type="button" onClick={onCreateQuote}>
-                  Ver orcamento completo
-                </button>
-              </div>
-            </SupportChatMessage>
+            {messages.length === 0 && !apiEnabled ? (
+              <>
+                <SupportChatMessage avatarUrl={GRAPHFLOW_LOGO_SRC} name="Grafica Exemplo" time="10:20" tone="agent">
+                  Ola, {firstName}! Como podemos ajudar voce hoje?
+                </SupportChatMessage>
+                <SupportChatMessage avatarUrl={resolvedClient?.avatarUrl} name={resolvedClient?.name ?? "Cliente"} time="10:31" tone="customer">
+                  Gostaria de fazer um orcamento de {formatNumber(activeOrder?.quantity ?? resolvedProduct?.minOrderQty ?? 1000)} unidades com acabamento frente e verso.
+                </SupportChatMessage>
+                <SupportChatMessage avatarUrl={GRAPHFLOW_LOGO_SRC} name="Grafica Exemplo" time="10:32" tone="agent">
+                  Perfeito. Me informe o tamanho, o tipo de papel desejado e se a arte ja esta pronta.
+                </SupportChatMessage>
+                <SupportChatMessage avatarUrl={resolvedClient?.avatarUrl} name={resolvedClient?.name ?? "Cliente"} time="10:34" tone="customer">
+                  Pode usar {productDetail}. Preciso receber com prazo curto e acompanhar o pedido.
+                </SupportChatMessage>
+                <SupportChatMessage avatarUrl={GRAPHFLOW_LOGO_SRC} name="Grafica Exemplo" time="10:35" tone="agent">
+                  <span>Otimo. Ja vou preparar seu atendimento com base no pedido em aberto.</span>
+                  <div className="support-quote-card">
+                    <div>
+                      <span>Orcamento {orderNumber}</span>
+                      <strong>Pronto</strong>
+                    </div>
+                    <p>{formatNumber(activeOrder?.quantity ?? resolvedProduct?.minOrderQty ?? 1000)} unidades · {productName}</p>
+                    <strong>{formatCurrency(orderValue)}</strong>
+                    <button className="support-quote-button" type="button" onClick={onCreateQuote}>
+                      Ver orcamento completo
+                    </button>
+                  </div>
+                </SupportChatMessage>
+              </>
+            ) : (
+              messages.map((msg) => (
+                <SupportChatMessage
+                  key={msg.id}
+                  avatarUrl={msg.tone === "agent" ? GRAPHFLOW_LOGO_SRC : resolvedClient?.avatarUrl}
+                  name={msg.tone === "agent" ? "Grafica Exemplo" : (resolvedClient?.name ?? "Cliente")}
+                  time={new Date(msg.createdAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                  tone={msg.tone as "agent" | "customer"}
+                >
+                  {msg.content}
+                </SupportChatMessage>
+              ))
+            )}
           </div>
 
           <div className="support-quick-actions" aria-label="Acoes rapidas de atendimento">
             <button type="button" onClick={() => onViewChange("catalog")}>
-              <BookOpen size={16} />
-              Ver catalogo
+              <BookOpen size={16} /> Catalogo
             </button>
             <button type="button" onClick={() => onViewChange("orders")}>
-              <ShoppingBag size={16} />
-              Meus pedidos
+              <ShoppingBag size={16} /> Pedidos
             </button>
             <button type="button" onClick={onCreateQuote}>
-              <FileText size={16} />
-              Gerar orcamento
+              <FileText size={16} /> Orcamento
             </button>
-            <button type="button" onClick={() => onViewChange("files")}>
-              <Paperclip size={16} />
-              Anexos
+            <button type="button" onClick={() => onViewChange("products")}>
+              <Package size={16} /> Produtos
+            </button>
+            <button type="button" onClick={() => onViewChange("clients")}>
+              <Users size={16} /> Clientes
+            </button>
+            <button type="button" onClick={() => openWhatsApp()}>
+              <MessageCircle size={16} /> WhatsApp
             </button>
           </div>
 
-          <form className="support-chat-compose" onSubmit={(event) => event.preventDefault()}>
+          <form className="support-chat-compose" onSubmit={handleSendMessage}>
             <button className="support-compose-icon" type="button" aria-label="Anexar arquivo" title="Anexar arquivo">
               <Paperclip size={18} />
             </button>
-            <input placeholder="Digite sua mensagem..." aria-label="Mensagem" />
-            <button className="support-send-button" type="submit">
+            <input
+              placeholder="Digite sua mensagem..."
+              aria-label="Mensagem"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+            />
+            <button className="support-send-button" type="submit" disabled={!inputText.trim()}>
               <Send size={18} />
             </button>
           </form>
@@ -5986,23 +6110,23 @@ function SupportView({
           <div className="support-client-line">
             <div
               className="support-client-avatar"
-              style={client?.avatarUrl ? { backgroundImage: `url(${client.avatarUrl})` } : undefined}
+              style={resolvedClient?.avatarUrl ? { backgroundImage: `url(${resolvedClient.avatarUrl})` } : undefined}
             >
-              {!client?.avatarUrl ? (client?.name ?? "CL").slice(0, 2).toUpperCase() : null}
+              {!resolvedClient?.avatarUrl ? (resolvedClient?.name ?? "CL").slice(0, 2).toUpperCase() : null}
             </div>
             <div>
-              <strong>{client?.name ?? "Cliente novo"}</strong>
-              <span>{client?.company ?? "Cadastro em andamento"}</span>
+              <strong>{resolvedClient?.name ?? "Cliente novo"}</strong>
+              <span>{resolvedClient?.company ?? "Cadastro em andamento"}</span>
             </div>
           </div>
           <div className="support-contact-list">
             <span>
               <Phone size={15} />
-              {client?.whatsapp ?? client?.phone ?? "(11) 99999-9999"}
+              {resolvedClient?.whatsapp ?? resolvedClient?.phone ?? "(11) 99999-9999"}
             </span>
             <span>
               <Mail size={15} />
-              {client?.email ?? "email@exemplo.com"}
+              {resolvedClient?.email ?? "email@exemplo.com"}
             </span>
           </div>
         </section>
@@ -6015,9 +6139,9 @@ function SupportView({
           <div className="support-product-preview">
             <div
               className="support-product-thumb"
-              style={product?.thumbnailUrl ? { backgroundImage: `url(${product.thumbnailUrl})` } : undefined}
+              style={resolvedProduct?.thumbnailUrl ? { backgroundImage: `url(${resolvedProduct.thumbnailUrl})` } : undefined}
             >
-              {!product?.thumbnailUrl ? <Package size={24} /> : null}
+              {!resolvedProduct?.thumbnailUrl ? <Package size={24} /> : null}
             </div>
             <div>
               <strong>{productName}</strong>
@@ -6027,7 +6151,7 @@ function SupportView({
           <div className="support-summary-list">
             <span>
               Quantidade
-              <strong>{formatNumber(activeOrder?.quantity ?? product?.minOrderQty ?? 0)}</strong>
+              <strong>{formatNumber(activeOrder?.quantity ?? resolvedProduct?.minOrderQty ?? 0)}</strong>
             </span>
             <span>
               Entrega
@@ -6046,16 +6170,16 @@ function SupportView({
             <strong>Fila ativa</strong>
           </div>
           <button className="primary-button wide" type="button" onClick={onCreateQuote}>
-            <FileText size={18} />
-            Criar orcamento
+            <FileText size={18} /> Criar orcamento
           </button>
           <button className="ghost-button support-action" type="button" onClick={onCreateOrder}>
-            <ClipboardList size={17} />
-            Novo pedido
+            <ClipboardList size={17} /> Novo pedido
           </button>
           <button className="ghost-button support-action" type="button" onClick={() => onViewChange("clients")}>
-            <Users size={17} />
-            Abrir cadastro
+            <Users size={17} /> Abrir cadastro
+          </button>
+          <button className="ghost-button support-action" type="button" onClick={() => openWhatsApp()} style={{ borderColor: "rgba(22,185,129,0.3)", color: "#16b981" }}>
+            <MessageCircle size={17} /> Abrir no WhatsApp
           </button>
         </section>
 
@@ -6120,6 +6244,180 @@ function SupportChatMessage({
         <div className="support-bubble">{children}</div>
       </div>
     </article>
+  );
+}
+
+function TenantsPanel() {
+  const [tenants, setTenants] = useState<TenantRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingTenant, setEditingTenant] = useState<TenantRecord | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [formName, setFormName] = useState("");
+  const [formSlug, setFormSlug] = useState("");
+  const [formStatus, setFormStatus] = useState<string>("ACTIVE");
+  const [feedback, setFeedback] = useState("");
+
+  useEffect(() => {
+    if (!graphflowApi.enabled()) {
+      setLoading(false);
+      return;
+    }
+    graphflowApi.listTenants().then(setTenants).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  async function handleCreate() {
+    if (!formName.trim() || !formSlug.trim()) return;
+    try {
+      const created = await graphflowApi.createTenant({ name: formName.trim(), slug: formSlug.trim() });
+      setTenants((prev) => [...prev, created]);
+      setCreating(false);
+      setFormName("");
+      setFormSlug("");
+      setFeedback(`Tenant "${created.name}" criado.`);
+    } catch (error) {
+      setFeedback(`Erro: ${error instanceof Error ? error.message : "Falha na conexao."}`);
+    }
+  }
+
+  async function handleUpdate() {
+    if (!editingTenant || !formName.trim()) return;
+    try {
+      const updated = await graphflowApi.updateTenant(editingTenant.id, { name: formName.trim(), status: formStatus });
+      setTenants((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      setEditingTenant(null);
+      setFeedback(`Tenant "${updated.name}" atualizado.`);
+    } catch (error) {
+      setFeedback(`Erro: ${error instanceof Error ? error.message : "Falha na conexao."}`);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!window.confirm("Tem certeza que deseja remover este tenant?")) return;
+    try {
+      await graphflowApi.deleteTenant(id);
+      setTenants((prev) => prev.filter((t) => t.id !== id));
+      setFeedback("Tenant removido.");
+    } catch (error) {
+      setFeedback(`Erro: ${error instanceof Error ? error.message : "Falha na conexao."}`);
+    }
+  }
+
+  function startEdit(tenant: TenantRecord) {
+    setEditingTenant(tenant);
+    setFormName(tenant.name);
+    setFormSlug(tenant.slug);
+    setFormStatus(tenant.status);
+    setFeedback("");
+  }
+
+  function startCreate() {
+    setCreating(true);
+    setFormName("");
+    setFormSlug("");
+    setFormStatus("ACTIVE");
+    setFeedback("");
+  }
+
+  if (loading) {
+    return <div className="settings-reference-page table-card"><div className="settings-reference-head"><p>Carregando empresas...</p></div></div>;
+  }
+
+  if (!graphflowApi.enabled()) {
+    return <div className="settings-reference-page table-card"><div className="settings-reference-head"><p>API nao disponivel.</p></div></div>;
+  }
+
+  return (
+    <div className="settings-reference-page table-card">
+      <div className="settings-reference-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h2>Empresas (Tenants)</h2>
+          <p>Gerencie as empresas cadastradas no sistema.</p>
+        </div>
+        <button className="primary-button" type="button" onClick={startCreate}>
+          <Plus size={16} /> Nova empresa
+        </button>
+      </div>
+
+      {feedback ? <div className="settings-feedback">{feedback}</div> : null}
+
+      {creating || editingTenant ? (
+        <div className="settings-dialog-backdrop" role="dialog" aria-modal="true">
+          <button className="settings-dialog-scrim" type="button" aria-label="Fechar" onClick={() => { setCreating(false); setEditingTenant(null); }} />
+          <form className="settings-dialog" onSubmit={(e) => { e.preventDefault(); creating ? handleCreate() : handleUpdate(); }}>
+            <div className="settings-dialog-head">
+              <span><Building2 size={22} /></span>
+              <div>
+                <h3>{creating ? "Nova empresa" : "Editar empresa"}</h3>
+                <p>Preencha os dados da empresa.</p>
+              </div>
+              <button className="icon-button" type="button" aria-label="Fechar" onClick={() => { setCreating(false); setEditingTenant(null); }}>
+                <X size={18} />
+              </button>
+            </div>
+            <label className="settings-dialog-field">
+              Nome
+              <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Nome da empresa" required />
+            </label>
+            <label className="settings-dialog-field">
+              Slug (identificador único)
+              <input type="text" value={formSlug} onChange={(e) => setFormSlug(e.target.value)} placeholder="ex: minha-empresa" required disabled={!!editingTenant} />
+            </label>
+            {editingTenant ? (
+              <label className="settings-dialog-field">
+                Status
+                <select value={formStatus} onChange={(e) => setFormStatus(e.target.value)}>
+                  <option value="ACTIVE">Ativo</option>
+                  <option value="SUSPENDED">Suspenso</option>
+                  <option value="INACTIVE">Inativo</option>
+                </select>
+              </label>
+            ) : null}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button className="ghost-button" type="button" onClick={() => { setCreating(false); setEditingTenant(null); }}>Cancelar</button>
+              <button className="primary-button" type="submit">{creating ? "Criar" : "Salvar"}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      <div className="logs-table" style={{ marginTop: 16 }}>
+        <div className="logs-thead">
+          <span>Nome</span>
+          <span>Slug</span>
+          <span>Status</span>
+          <span>Ações</span>
+        </div>
+        {tenants.map((tenant) => (
+          <div key={tenant.id} className="logs-row">
+            <div className="logs-cell-event">
+              <strong>{tenant.name}</strong>
+            </div>
+            <span>{tenant.slug}</span>
+            <span>
+              <span className={`logs-action-badge`} style={{
+                background: tenant.status === "ACTIVE" ? "#16b98118" : tenant.status === "SUSPENDED" ? "#ff9f1c18" : "#ee304518",
+                color: tenant.status === "ACTIVE" ? "#16b981" : tenant.status === "SUSPENDED" ? "#ff9f1c" : "#ee3045",
+              }}>
+                {tenant.status === "ACTIVE" ? "Ativo" : tenant.status === "SUSPENDED" ? "Suspenso" : "Inativo"}
+              </span>
+            </span>
+            <span style={{ display: "flex", gap: 6 }}>
+              <button className="ghost-button" type="button" onClick={() => startEdit(tenant)} style={{ padding: "4px 8px", fontSize: 12 }}>
+                Editar
+              </button>
+              <button className="ghost-button" type="button" onClick={() => handleDelete(tenant.id)} style={{ padding: "4px 8px", fontSize: 12, color: "#ee3045" }}>
+                Remover
+              </button>
+            </span>
+          </div>
+        ))}
+        {tenants.length === 0 ? (
+          <div className="logs-empty" style={{ padding: 24, textAlign: "center" }}>
+            <p>Nenhuma empresa cadastrada.</p>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -8715,6 +9013,20 @@ function QuoteEditor({
             <span>Total</span>
             <strong>{formatCurrency(total)}</strong>
           </div>
+          {(() => {
+            const condition = draft.paymentCondition?.toLowerCase() ?? "";
+            const isHalfPayment = condition.includes("50%") || condition.includes("entrada");
+            if (isHalfPayment) {
+              const halfTotal = total / 2;
+              return (
+                <div className="quote-half-payment" style={{ marginTop: 8, padding: 8, background: "var(--muted)", borderRadius: 6, fontSize: 14 }}>
+                  <span style={{ color: "var(--foreground-muted)" }}>Valor de entrada (50%):</span>
+                  <strong style={{ marginLeft: 8, color: "var(--primary)" }}>{formatCurrency(halfTotal)}</strong>
+                </div>
+              );
+            }
+            return null;
+          })()}
           <div className="quote-validity">
             <ShieldCheck size={18} />
             Este orçamento é válido até {formatDateShort(draft.validUntil)}
@@ -9750,7 +10062,8 @@ function SettingsView({
   onToggleTheme: () => void;
   onRefreshData: () => void;
 }) {
-  const [settingsValues, setSettingsValues] = useState<Record<string, string>>({
+  const [settingsTab, setSettingsTab] = useState<"config" | "logs" | "tenants">("config");
+  const defaultSettings: Record<string, string> = {
     tenant: "GraphFlow Matriz",
     profile: "Administrador",
     unit: "São Paulo",
@@ -9766,10 +10079,23 @@ function SettingsView({
     quotes: "PDF, link público e aceite",
     publicLinks: "Token com expiração",
     notifications: "Painel interno",
-  });
+  };
+  const [settingsValues, setSettingsValues] = useState<Record<string, string>>(defaultSettings);
+  const [settingsLoading, setSettingsLoading] = useState(true);
   const [activeSetting, setActiveSetting] = useState<SettingsItemConfig | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const [settingsFeedback, setSettingsFeedback] = useState("");
+
+  useEffect(() => {
+    if (!graphflowApi.enabled()) {
+      setSettingsLoading(false);
+      return;
+    }
+    graphflowApi.listSettings().then((data) => {
+      setSettingsValues((prev) => ({ ...prev, ...data }));
+      setSettingsLoading(false);
+    }).catch(() => setSettingsLoading(false));
+  }, []);
 
   const settingCards: SettingsCardConfig[] = [
     {
@@ -9859,42 +10185,66 @@ function SettingsView({
     setSettingsFeedback("");
   }
 
-  function saveSetting() {
+  async function saveSetting() {
     if (!activeSetting) return;
-    setSettingsValues((current) => ({ ...current, [activeSetting.key]: editingValue }));
+    const key = activeSetting.key;
+    const updated = { ...settingsValues, [key]: editingValue };
+    setSettingsValues(updated);
     setSettingsFeedback(`${activeSetting.label} atualizado.`);
     setActiveSetting(null);
+
+    if (graphflowApi.enabled()) {
+      try {
+        await graphflowApi.upsertSettings({ [key]: editingValue });
+      } catch (error) {
+        setSettingsFeedback(`Erro ao salvar: ${error instanceof Error ? error.message : "Falha na conexao."}`);
+      }
+    }
   }
 
   return (
     <section className="settings-reference-page table-card">
-      <div className="settings-reference-head">
-        <h2>Configurações</h2>
-        <p>Gerencie as preferências e configurações da sua conta.</p>
-      </div>
+      <nav className="detail-tabs" style={{ padding: "0 32px" }}>
+        <button className={settingsTab === "config" ? "active" : ""} onClick={() => setSettingsTab("config")}>Configurações</button>
+        <button className={settingsTab === "tenants" ? "active" : ""} onClick={() => setSettingsTab("tenants")}>Empresas</button>
+        <button className={settingsTab === "logs" ? "active" : ""} onClick={() => setSettingsTab("logs")}>Logs do sistema</button>
+      </nav>
 
-      <div className="settings-reference-grid">
-        {settingCards.map((card) => (
-          <SettingsReferenceCard card={card} key={card.title} onOpenSetting={openSetting} />
-        ))}
-      </div>
+      {settingsTab === "tenants" ? (
+        <TenantsPanel />
+      ) : settingsTab === "config" ? (
+        <>
+          <div className="settings-reference-head">
+            <h2>Configurações</h2>
+            <p>Gerencie as preferências e configurações da sua conta.</p>
+          </div>
 
-      {settingsFeedback ? (
-        <div className="settings-feedback">
-          <CheckCircle2 size={18} />
-          {settingsFeedback}
-        </div>
-      ) : null}
+          <div className="settings-reference-grid">
+            {settingCards.map((card) => (
+              <SettingsReferenceCard card={card} key={card.title} onOpenSetting={openSetting} />
+            ))}
+          </div>
 
-      {activeSetting ? (
-        <SettingsConfigDialog
-          setting={activeSetting}
-          value={editingValue}
-          onChange={setEditingValue}
-          onClose={() => setActiveSetting(null)}
-          onSave={saveSetting}
-        />
-      ) : null}
+          {settingsFeedback ? (
+            <div className="settings-feedback">
+              <CheckCircle2 size={18} />
+              {settingsFeedback}
+            </div>
+          ) : null}
+
+          {activeSetting ? (
+            <SettingsConfigDialog
+              setting={activeSetting}
+              value={editingValue}
+              onChange={setEditingValue}
+              onClose={() => setActiveSetting(null)}
+              onSave={saveSetting}
+            />
+          ) : null}
+        </>
+      ) : (
+        <LogsView />
+      )}
     </section>
   );
 }
@@ -11312,6 +11662,324 @@ function MaintenanceForm({
   );
 }
 
+const paymentStatusOptions: Record<string, string> = {
+  PENDING: "Pendente",
+  PARTIAL: "Parcial com desconto",
+  PAID: "Pago",
+  OVERDUE: "Vencido",
+  CANCELED: "Cancelado",
+};
+
+function OrderStatusCard({
+  order,
+  onSave,
+  onClose,
+}: {
+  order: Order;
+  onSave: (orderId: string, updates: {
+    status?: OrderStatus;
+    paymentStatus?: string;
+    deliveryDate?: string;
+    carrier?: string;
+    trackingCode?: string;
+    notes?: string;
+  }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const total = order.total;
+  const paidAmount = order.paidAmount ?? 0;
+  const remainingAmount = order.remainingAmount ?? Math.max(0, total - paidAmount);
+  const paidPercent = total > 0 ? Math.round((paidAmount / total) * 1000) / 10 : 0;
+  const remainingPercent = Math.max(0, Math.round(1000 - paidPercent * 10) / 10);
+  const discount = 0;
+
+  const [status, setStatus] = useState(order.status);
+  const [paymentStatus, setPaymentStatus] = useState<string>(order.paymentStatus ?? "PARTIAL");
+  const [paymentAmount, setPaymentAmount] = useState(remainingAmount > 0 ? remainingAmount : 0);
+  const [paymentMethod, setPaymentMethod] = useState("PIX");
+  const [paymentDiscount, setPaymentDiscount] = useState(0);
+  const [paymentNotes, setPaymentNotes] = useState("");
+  const [deliveryDate, setDeliveryDate] = useState(order.dueDate ?? "");
+  const [carrier, setCarrier] = useState("");
+  const [trackingCode, setTrackingCode] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await onSave(order.id, { status, paymentStatus, deliveryDate, carrier, trackingCode, notes });
+      onClose();
+    } catch {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="order-status-form" onSubmit={handleSubmit}>
+      <div className="order-status-header">
+        <h2>Atualizar Pedido</h2>
+        <p>{order.number ?? order.id} — {order.customer}</p>
+      </div>
+
+      <div className="order-status-grid">
+        {/* ===== LEFT COLUMN ===== */}
+        <div>
+
+          {/* STATUS */}
+          <section className="order-status-section">
+            <h3>
+              <span className="section-icon"><ClipboardList size={16} /></span>
+              Status
+            </h3>
+            <label>
+              <span>Status do pedido</span>
+              <select
+                value={status}
+                onChange={(event) => setStatus(event.target.value as OrderStatus)}
+              >
+                {(Object.keys(statusMeta) as OrderStatus[]).map((s) => (
+                  <option key={s} value={s}>{statusMeta[s].label}</option>
+                ))}
+              </select>
+            </label>
+          </section>
+
+          {/* PAGAMENTO */}
+          <section className="order-status-section">
+            <h3>
+              <span className="section-icon"><CircleDollarSign size={16} /></span>
+              Pagamento
+            </h3>
+            <label>
+              <span>Situação do pagamento</span>
+              <select
+                value={paymentStatus}
+                onChange={(event) => setPaymentStatus(event.target.value)}
+              >
+                {Object.entries(paymentStatusOptions).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+
+            {/* Payment summary cards */}
+            <div className="payment-summary-cards">
+              <div className="payment-metric-card">
+                <div className="metric-icon" style={{ background: "color-mix(in srgb, #236dff 12%, transparent)" }}>
+                  <Wallet size={18} color="#236dff" />
+                </div>
+                <span className="metric-label">Pago até o momento</span>
+                <span className="metric-value" style={{ color: "#236dff" }}>{formatCurrency(paidAmount)}</span>
+                <span className="metric-percent" style={{ color: "#236dff" }}>{paidPercent}%</span>
+              </div>
+              <div className="payment-metric-card">
+                <div className="metric-icon" style={{ background: "color-mix(in srgb, #fb920c 12%, transparent)" }}>
+                  <Receipt size={18} color="#fb920c" />
+                </div>
+                <span className="metric-label">Saldo devedor</span>
+                <span className="metric-value" style={{ color: "#fb920c" }}>{formatCurrency(remainingAmount)}</span>
+                <span className="metric-percent" style={{ color: "#fb920c" }}>{remainingPercent}%</span>
+              </div>
+              <div className="payment-metric-card">
+                <div className="metric-icon" style={{ background: "color-mix(in srgb, #8b5cf6 12%, transparent)" }}>
+                  <Calculator size={18} color="#8b5cf6" />
+                </div>
+                <span className="metric-label">Total após desconto</span>
+                <span className="metric-value" style={{ color: "#8b5cf6" }}>{formatCurrency(total)}</span>
+                <span className="metric-percent" style={{ color: "#8b5cf6" }}>100%</span>
+              </div>
+            </div>
+
+            {/* New payment form */}
+            <div style={{ borderTop: "1px solid var(--line)", paddingTop: "16px", marginTop: "4px" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, display: "block", marginBottom: 14 }}>Registrar novo pagamento</span>
+              <div className="form-row-2">
+                <label>
+                  <span>Valor pago agora</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={paymentAmount > 0 ? paymentAmount.toFixed(2) : ""}
+                    placeholder="R$ 0,00"
+                    onChange={(event) => {
+                      const val = parseFloat(event.target.value.replace(/[^0-9.,]/g, "").replace(",", "."));
+                      setPaymentAmount(isNaN(val) ? 0 : val);
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>Forma de pagamento</span>
+                  <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}>
+                    {paymentMethodOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label>
+                <span>Desconto aplicado</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={paymentDiscount > 0 ? paymentDiscount.toFixed(2) : ""}
+                  placeholder="R$ 0,00"
+                  onChange={(event) => {
+                    const val = parseFloat(event.target.value.replace(/[^0-9.,]/g, "").replace(",", "."));
+                    setPaymentDiscount(isNaN(val) ? 0 : val);
+                  }}
+                />
+                <span className="field-helper">Desconto concedido neste pedido.</span>
+              </label>
+              <label>
+                <span>Observações do pagamento</span>
+                <textarea
+                  value={paymentNotes}
+                  maxLength={600}
+                  placeholder="Observações sobre o pagamento"
+                  onChange={(event) => setPaymentNotes(event.target.value)}
+                />
+              </label>
+            </div>
+          </section>
+
+          {/* ENVIO */}
+          <section className="order-status-section">
+            <h3>
+              <span className="section-icon"><Truck size={16} /></span>
+              Envio
+            </h3>
+            <div className="form-row-2">
+              <label>
+                <span>Data de entrega</span>
+                <input
+                  type="date"
+                  value={deliveryDate}
+                  onChange={(event) => setDeliveryDate(event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Transportadora</span>
+                <input
+                  type="text"
+                  value={carrier}
+                  maxLength={120}
+                  placeholder="Nome da transportadora"
+                  onChange={(event) => setCarrier(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="form-row-2">
+              <label>
+                <span>Código de rastreio</span>
+                <input
+                  type="text"
+                  value={trackingCode}
+                  maxLength={120}
+                  placeholder="Código de rastreamento"
+                  onChange={(event) => setTrackingCode(event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Observações</span>
+                <input
+                  type="text"
+                  value={notes}
+                  maxLength={600}
+                  placeholder="Observações sobre o pedido"
+                  onChange={(event) => setNotes(event.target.value)}
+                />
+              </label>
+            </div>
+          </section>
+        </div>
+
+        {/* ===== RIGHT COLUMN - SIDEBAR ===== */}
+        <div className="order-status-sidebar">
+
+          {/* RESUMO FINANCEIRO */}
+          <div className="sidebar-card">
+            <h3>Resumo financeiro</h3>
+            <div className="finance-summary-line">
+              <span>Subtotal</span>
+              <strong>{formatCurrency(total + discount)}</strong>
+            </div>
+            <div className="finance-summary-line">
+              <span>Desconto</span>
+              <strong style={{ color: "var(--success, #16a34a)" }}>-{formatCurrency(discount)}</strong>
+            </div>
+            <div className="finance-summary-line total">
+              <span>Total após desconto</span>
+              <strong style={{ color: "#236dff" }}>{formatCurrency(total)}</strong>
+            </div>
+
+            <div className="progress-block">
+              <div className="progress-row">
+                <span style={{ color: "#236dff" }}>Pago</span>
+                <strong>{formatCurrency(paidAmount)}</strong>
+              </div>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${paidPercent}%`, background: "#236dff" }} />
+              </div>
+              <div className="progress-row" style={{ marginTop: 4 }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{paidPercent}%</span>
+              </div>
+            </div>
+
+            <div className="progress-block">
+              <div className="progress-row">
+                <span style={{ color: "#fb920c" }}>Saldo devedor</span>
+                <strong>{formatCurrency(remainingAmount)}</strong>
+              </div>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${remainingPercent}%`, background: "#fb920c" }} />
+              </div>
+              <div className="progress-row" style={{ marginTop: 4 }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{remainingPercent}%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* ALERTA */}
+          <div className="alert-card">
+            <AlertTriangle size={18} color="#236dff" className="alert-icon" />
+            <span>Este pedido possui pagamento parcial e saldo pendente de <strong>{formatCurrency(remainingAmount)}</strong>.</span>
+          </div>
+
+          {/* HISTÓRICO DE PAGAMENTOS */}
+          <div className="sidebar-card">
+            <h3>Histórico de pagamentos</h3>
+            <div className="payment-timeline">
+              <div className="timeline-item">
+                <div className="timeline-dot" />
+                <div className="timeline-content">
+                  <span className="timeline-title">Transferência Bancária</span>
+                  <span className="timeline-sub">Pagamento parcial</span>
+                  <span className="timeline-sub" style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>18/06/2026</span>
+                </div>
+                <span className="timeline-amount" style={{ color: "#16a34a" }}>{formatCurrency(paidAmount)}</span>
+              </div>
+            </div>
+            <button type="button" className="timeline-view-all">
+              <Eye size={15} />
+              Ver histórico completo
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* FOOTER */}
+      <div className="order-status-footer">
+        <button type="button" className="ghost-button" onClick={onClose}>Cancelar</button>
+        <button type="submit" className="primary-button" disabled={saving}>
+          {saving ? "Salvando..." : "Salvar Alterações"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function ExpenseForm({
   draft,
   onDraftChange,
@@ -11351,11 +12019,11 @@ function ExpenseForm({
         <label>
           Relacionado a
           <select value={draft.referenceType} onChange={(event) => onDraftChange({ ...draft, referenceType: event.target.value as FinanceEntry["referenceType"] })}>
-            <option value="Geral">Geral</option>
-            <option value="Pedido">Pedido</option>
-            <option value="Produto">Produto</option>
-            <option value="Cliente">Cliente</option>
-            <option value="Fornecedor">Fornecedor</option>
+            <option value="general">Geral</option>
+            <option value="order">Pedido</option>
+            <option value="product">Produto</option>
+            <option value="client">Cliente</option>
+            <option value="supplier">Fornecedor</option>
           </select>
         </label>
         <TextField label="Código relacionado" value={draft.referenceId} onChange={(referenceId) => onDraftChange({ ...draft, referenceId })} />
@@ -11580,7 +12248,7 @@ function DetailTabs({
   onChange: (tab: DocumentDetailTab) => void;
 }) {
   return (
-    <nav className="document-detail-tabs" aria-label="Seções do documento">
+    <nav className="detail-tabs" aria-label="Seções do documento">
       {tabs.map((tab) => (
         <button
           className={activeTab === tab.id ? "active" : ""}
@@ -11593,6 +12261,18 @@ function DetailTabs({
       ))}
     </nav>
   );
+}
+
+const referenceTypeLabels: Record<NonNullable<FinanceEntry["referenceType"]>, string> = {
+  order: "Pedido",
+  product: "Produto",
+  client: "Cliente",
+  supplier: "Fornecedor",
+  general: "Geral",
+};
+
+function referenceTypeLabel(type: FinanceEntry["referenceType"] | undefined | null): string | undefined {
+  return type ? referenceTypeLabels[type] ?? type : undefined;
 }
 
 function paymentFinanceStatus(status: PaymentStatus): FinanceEntry["status"] {
@@ -11615,7 +12295,7 @@ function paymentTransactionToFinanceEntry(payment: PaymentTransactionRecord): Fi
     due: date ? formatDateShort(date) : "",
     status: paymentFinanceStatus(payment.status),
     category: "Pagamentos",
-    referenceType: payment.orderId ? "Pedido" : payment.purchaseOrderId ? "Fornecedor" : "Geral",
+    referenceType: payment.orderId ? "order" : payment.purchaseOrderId ? "supplier" : "general",
     referenceId,
     paymentMethod: paymentMethodLabels[payment.method] ?? payment.method,
     notes: [notesFromMetadata, payment.providerReference].filter(Boolean).join(" - "),
@@ -11716,20 +12396,20 @@ function DocumentFinanceSummary({
     <aside className="document-finance-card">
       <h3>Resumo financeiro</h3>
       <div className="finance-summary-line">
-        <span>Subtotal</span>
+        <span><ShoppingBag size={15} color="var(--muted)" style={{ marginRight: 6, verticalAlign: -2 }} /> Subtotal</span>
         <strong>{formatCurrency(subtotal)}</strong>
       </div>
       <div className="finance-summary-line">
-        <span>Descontos</span>
-        <strong>{formatCurrency(0)}</strong>
+        <span><Tag size={15} color="#16a34a" style={{ marginRight: 6, verticalAlign: -2 }} /> Descontos</span>
+        <strong style={{ color: "#16a34a" }}>-{formatCurrency(0)}</strong>
       </div>
       <div className="finance-summary-line">
-        <span>Pagamentos</span>
-        <strong>{formatCurrency(paidAmount)}</strong>
+        <span><CircleDollarSign size={15} color="#236dff" style={{ marginRight: 6, verticalAlign: -2 }} /> Pagamentos</span>
+        <strong style={{ color: "#236dff" }}>{formatCurrency(paidAmount)}</strong>
       </div>
       <div className="document-finance-balance">
-        <span>Saldo devedor</span>
-        <strong>{formatCurrency(pendingAmount)}</strong>
+        <span><Receipt size={16} color="#fb920c" style={{ marginRight: 6, verticalAlign: -2 }} /> Saldo devedor</span>
+        <strong style={{ color: "#fb920c" }}>{formatCurrency(pendingAmount)}</strong>
       </div>
       {isAdding ? (
         <form
@@ -11739,7 +12419,7 @@ function DocumentFinanceSummary({
           <NumberField label="Valor" value={amount} onChange={setAmount} />
           <label>
             Método
-            <select value={method} onChange={(e) => setMethod(e.target.value)}>
+            <select value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)}>
               <option value="Pix">Pix</option>
               <option value="Cartão de Crédito">Cartão de Crédito</option>
               <option value="Cartão de Débito">Cartão de Débito</option>
@@ -11784,7 +12464,7 @@ function PaymentsPanel({ entries }: { entries: FinanceEntry[] }) {
           <span className={entry.status === "Recebido" ? "positive" : "warning"}>{entry.status}</span>
           <div>
             <strong>{entry.label}</strong>
-            <small>{entry.due ? `Vencimento: ${entry.due}` : "Sem vencimento"}</small>
+            <span className="payment-due-badge">{entry.due ? `Vencimento: ${entry.due}` : "Sem vencimento"}</span>
           </div>
           <strong>{formatCurrency(entry.value)}</strong>
         </article>
@@ -11801,7 +12481,7 @@ function LogPanel({ entries }: { entries: Array<{ title: string; detail: string;
           <span />
           <div>
             <strong>{entry.title}</strong>
-            <small>{entry.detail}</small>
+            <span className="log-detail-badge">{entry.detail}</span>
           </div>
           <time>{entry.time}</time>
         </article>
@@ -11835,8 +12515,11 @@ function OrderDetail({
   onUploadFile: (file: File, scope: UploadScope) => Promise<UploadedFile>;
   onSave: (orderId: string, update: OrderEditDraft & { clientEmail?: string; clientPhone?: string; clientDocument?: string }) => void | Promise<void>;
   onAddArtFile: (order: Order, input: { productName: string; name: string; url: string }) => void | Promise<void>;
-  onAddPayment?: (amount: number, method: string) => void | Promise<void>;
+  onAddPayment?: (input: OrderPaymentInput) => void | Promise<void>;
 }) {
+  const orderClient = clients.find(
+    (item) => item.id === order.customer || item.name === order.customer || item.company === order.customer,
+  );
   const [draft, setDraft] = useState<OrderEditDraft & { clientEmail: string; clientPhone: string; clientDocument: string }>({
     id: order.id,
     customer: order.customer,
@@ -11849,9 +12532,9 @@ function OrderDetail({
     priority: order.priority,
     machineId: order.machineId ?? "",
     responsible: order.responsible ?? "",
-    clientEmail: "",
-    clientPhone: "",
-    clientDocument: "",
+    clientEmail: orderClient?.email ?? "",
+    clientPhone: orderClient?.phone ?? orderClient?.whatsapp ?? "",
+    clientDocument: orderClient?.document ?? "",
   });
   const [artDraft, setArtDraft] = useState({ productName: order.product, name: "", url: "" });
   const linkedFiles = files.filter((file) => {
@@ -11889,9 +12572,7 @@ function OrderDetail({
   const [shareFeedback, setShareFeedback] = useState("");
   const receiptNumber = order.number ?? order.id;
   const [activeTab, setActiveTab] = useState<DocumentDetailTab>("summary");
-  const client = clients.find(
-    (item) => item.id === order.customer || item.name === order.customer || item.company === order.customer,
-  );
+  const client = orderClient;
   const paymentEntries = documentPaymentEntries(finance, [order.id, order.publicOrderId, order.number]);
   const publicLink = publicOrderLink(order);
   const orderLogEntries = [
@@ -11980,7 +12661,7 @@ function OrderDetail({
         onChange={setActiveTab}
         tabs={[
           { id: "summary", label: "Resumo" },
-          { id: "items", label: "Itens do Pedido" },
+          { id: "items", label: "Editar Pedido" },
           { id: "payments", label: "Pagamentos" },
           { id: "log", label: "Log de acompanhamento" },
         ]}
@@ -12036,6 +12717,7 @@ function OrderDetail({
                 : itemList.length === 1
                   ? artFiles
                   : [];
+              const downloadableFiles = allItemFiles.filter((f) => f.url);
               return (
                 <div className="order-items-row" key={item.id}>
                   <div className="order-item-product">
@@ -12049,55 +12731,51 @@ function OrderDetail({
                   <span className="order-item-unit-price">{formatCurrency(item.unitPrice || (item.total / Math.max(1, item.quantity)))}</span>
                   <strong className="order-item-total">{formatCurrency(item.total)}</strong>
                   <div className="order-item-files">
-                    {allItemFiles.map((file) => (
-                      <button
-                        key={file.id}
-                        className="ghost-button compact"
-                        type="button"
-                        title={file.url ? `Baixar ${file.name}` : `${file.name} (sem URL)`}
-                        disabled={!file.url}
-                        onClick={() => {
-                          if (!file.url) return;
-                          const a = document.createElement("a");
-                          a.href = file.url;
-                          a.download = file.name;
-                          a.target = "_blank";
-                          a.rel = "noopener noreferrer";
-                          a.click();
-                        }}
-                        style={{ maxWidth: 150, opacity: file.url ? 1 : 0.5 }}
+                    {downloadableFiles.length > 0 ? (
+                      downloadableFiles.map((file) => (
+                        <button
+                          key={file.id}
+                          className="icon-button"
+                          type="button"
+                          title={`Baixar ${file.name}`}
+                          onClick={() => {
+                            const a = document.createElement("a");
+                            a.href = file.url;
+                            a.download = file.name;
+                            a.target = "_blank";
+                            a.rel = "noopener noreferrer";
+                            a.click();
+                          }}
+                        >
+                          <Paperclip size={16} />
+                        </button>
+                      ))
+                    ) : (
+                      <label
+                        className="icon-button"
+                        title="Enviar arte"
+                        style={{ cursor: "pointer" }}
                       >
-                        <Download size={13} />
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 100 }}>
-                          {file.name}
-                        </span>
-                      </button>
-                    ))}
-                    <label
-                      className="ghost-button compact"
-                      title="Enviar arquivo para este item"
-                      style={{ cursor: "pointer", flexShrink: 0 }}
-                    >
-                      <Upload size={13} />
-                      {allItemFiles.length === 0 ? "Enviar" : ""}
-                      <input
-                        type="file"
-                        style={{ display: "none" }}
-                        accept="image/*,application/pdf,.zip"
-                        onChange={async (e) => {
-                          const file = e.currentTarget.files?.[0];
-                          if (!file) return;
-                          const uploaded = await safeUploadFile(onUploadFile, file, "orders");
-                          if (!uploaded) { if (e.currentTarget) e.currentTarget.value = ""; return; }
-                          await onAddArtFile(order, {
-                            productName: item.productName || item.description,
-                            name: uploaded.name,
-                            url: uploaded.url,
-                          });
-                          if (e.currentTarget) e.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
+                        <Upload size={16} />
+                        <input
+                          type="file"
+                          style={{ display: "none" }}
+                          accept="image/*,application/pdf,.zip"
+                          onChange={async (e) => {
+                            const file = e.currentTarget.files?.[0];
+                            if (!file) return;
+                            const uploaded = await safeUploadFile(onUploadFile, file, "orders");
+                            if (!uploaded) { if (e.currentTarget) e.currentTarget.value = ""; return; }
+                            await onAddArtFile(order, {
+                              productName: item.productName || item.description,
+                              name: uploaded.name,
+                              url: uploaded.url,
+                            });
+                            if (e.currentTarget) e.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    )}
                   </div>
                 </div>
               );
@@ -12183,20 +12861,9 @@ function OrderDetail({
       >
         <div className="form-section-title">Edição avançada</div>
         <div className="form-grid">
-          <TextField label="Cliente no pedido" value={draft.customer} onChange={(customer) => setDraft({ ...draft, customer })} required />
           <TextField label="E-mail no pedido" value={draft.clientEmail} onChange={(clientEmail) => setDraft({ ...draft, clientEmail })} />
           <TextField label="Telefone no pedido" value={draft.clientPhone} onChange={(clientPhone) => setDraft({ ...draft, clientPhone })} />
           <TextField label="Documento no pedido" value={draft.clientDocument} onChange={(clientDocument) => setDraft({ ...draft, clientDocument })} />
-          <label>
-            Produto
-            <select value={draft.productId} onChange={(event) => setDraft({ ...draft, productId: event.target.value })}>
-              {products.map((product) => (
-                <option value={product.id} key={product.id}>
-                  {product.name}
-                </option>
-              ))}
-            </select>
-          </label>
           <label>
             Status
             <select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as OrderStatus })}>
@@ -12246,70 +12913,6 @@ function OrderDetail({
           Salvar Pedido
         </button>
       </form>
-
-      <div className="order-art-panel">
-        <div className="form-section-title">Arquivos de arte por item</div>
-        {artFiles.length ? (
-          <div className="file-list compact">
-            {artFiles.map((file) => (
-              <article className="file-row" key={file.id}>
-                <span className="file-icon"><FileText size={18} /></span>
-                <div>
-                  <strong>{file.name}</strong>
-                  <span>{file.productName}</span>
-                </div>
-                <span>{file.size ?? "arquivo"}</span>
-                <button className="icon-button" type="button" title="Download" onClick={() => file.url && window.open(file.url, "_blank", "noopener,noreferrer")}>
-                  <Download size={16} />
-                </button>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="empty-state">Nenhuma arte vinculada a este pedido.</p>
-        )}
-        <form
-          className="inline-edit-panel"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void onAddArtFile(order, artDraft);
-            setArtDraft({ ...artDraft, name: "", url: "" });
-          }}
-        >
-          <select value={artDraft.productName} onChange={(event) => setArtDraft({ ...artDraft, productName: event.target.value })}>
-            <option value={order.product}>{order.product}</option>
-            {products.map((product) => (
-              <option value={product.name} key={product.id}>
-                {product.name}
-              </option>
-            ))}
-          </select>
-          <input value={artDraft.name} placeholder="Nome da arte" onChange={(event) => setArtDraft({ ...artDraft, name: event.target.value })} />
-          <label className="upload-field inline-upload">
-            <Upload size={15} />
-            <span>{artDraft.url ? "Arte enviada" : "Enviar arte"}</span>
-            <input
-              type="file"
-              onChange={async (event) => {
-                const input = event.currentTarget;
-                const file = event.target.files?.[0];
-                if (!file) return;
-                const uploaded = await safeUploadFile(onUploadFile, file, "orders");
-                if (!uploaded) {
-                  input.value = "";
-                  return;
-                }
-                setArtDraft({ ...artDraft, name: artDraft.name || uploaded.name, url: uploaded.url });
-                input.value = "";
-              }}
-            />
-          </label>
-          <button className="ghost-button compact" type="submit">
-            <Upload size={15} />
-            Anexar
-          </button>
-        </form>
-      </div>
             </>
           ) : null}
 
@@ -12326,17 +12929,20 @@ function OrderDetail({
 function QuoteDetail({
   quote,
   clients,
+  users,
   finance,
   onConvert,
 }: {
   quote: Quote;
   clients: Client[];
+  users: UserAccount[];
   finance: FinanceEntry[];
   onConvert?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<DocumentDetailTab>("summary");
   const client = clients.find((item) => item.id === quote.customerId);
   const total = quoteTotal(quote);
+  const sellerName = users.find((u) => u.id === quote.responsible)?.name || quote.responsible || "Equipe comercial";
   const publicLink = publicQuoteLink(quote);
   const paymentEntries = documentPaymentEntries(finance, [quote.id, quote.publicQuoteId]);
   const quoteLogEntries = [
@@ -12347,38 +12953,55 @@ function QuoteDetail({
   ];
 
   return (
-    <div className="modal-form quote-detail document-detail">
+    <div className="modal-form quote-detail">
       <ModalHeader icon={FileText} title={`Orçamento ${quote.id}`} subtitle="Detalhes comerciais, itens, pagamentos e acompanhamento." />
 
-      <section className="document-client-bar">
-        <div>
-          <span>ID</span>
-          <strong>{quote.id}</strong>
+      <section className="document-client-bar-new">
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><FileText size={20} /></div>
+          <div className="client-bar-info">
+            <span>Código</span>
+            <strong>{quote.id}</strong>
+          </div>
         </div>
-        <div>
-          <span>Cliente</span>
-          <strong>{client?.company ?? quote.customerName}</strong>
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><User size={20} /></div>
+          <div className="client-bar-info">
+            <span>Cliente</span>
+            <strong>{client?.company ?? quote.customerName}</strong>
+          </div>
         </div>
-        <div>
-          <span>Documento</span>
-          <strong>{client?.document || "Não informado"}</strong>
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><FileText size={20} /></div>
+          <div className="client-bar-info">
+            <span>Documento</span>
+            <strong>{client?.document || "Não informado"}</strong>
+          </div>
         </div>
-        <div>
-          <span>Telefone</span>
-          <strong>{client?.phone || client?.whatsapp || "Não informado"}</strong>
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><Phone size={20} /></div>
+          <div className="client-bar-info">
+            <span>Telefone</span>
+            <strong>{client?.phone || client?.whatsapp || "Não informado"}</strong>
+          </div>
         </div>
-        <div>
-          <span>E-mail</span>
-          <strong>{quote.customerEmail || client?.email || "Não informado"}</strong>
+      </section>
+      <div className="quote-client-bar-actions">
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><Mail size={20} /></div>
+          <div className="client-bar-info">
+            <span>E-mail</span>
+            <strong>{quote.customerEmail || client?.email || "Não informado"}</strong>
+          </div>
         </div>
-        <div className="document-client-actions">
+        <div className="quote-actions-group">
           {onConvert ? (
             <button className="icon-button" type="button" title="Converter em Pedido" onClick={onConvert}>
-              <ClipboardList size={16} />
+              <ClipboardList size={18} />
             </button>
           ) : null}
           <button className="icon-button" type="button" title="Enviar e-mail" disabled={!quote.customerEmail && !client?.email}>
-            <Mail size={16} />
+            <Mail size={18} />
           </button>
           <button
             className="icon-button"
@@ -12387,15 +13010,15 @@ function QuoteDetail({
             disabled={!publicLink}
             onClick={() => publicLink && void navigator.clipboard?.writeText(publicLink)}
           >
-            <Link2 size={16} />
+            <Link2 size={18} />
           </button>
           {publicLink ? (
             <a className="icon-button" href={publicLink} target="_blank" rel="noreferrer" title="Abrir link público">
-              <ArrowUpRight size={16} />
+              <ArrowUpRight size={18} />
             </a>
           ) : null}
         </div>
-      </section>
+      </div>
 
       <DetailTabs
         activeTab={activeTab}
@@ -12411,34 +13034,51 @@ function QuoteDetail({
       <div className="document-detail-layout">
         <div className="document-detail-main">
           {activeTab === "summary" ? (
-            <section className="document-summary-panel">
-              <div className="document-summary-head">
-                <div>
-                  <span>Status</span>
-                  <strong>{quote.status}</strong>
-                </div>
-                <div>
-                  <span>Data</span>
-                  <strong>{quote.createdAt || "Não informado"}</strong>
-                </div>
-                <div>
-                  <span>Validade</span>
-                  <strong>{formatDateShort(quote.validUntil)}</strong>
-                </div>
-                <div>
-                  <span>Vendedor</span>
-                  <strong>{quote.responsible || "Equipe comercial"}</strong>
+            <>
+              <div className="order-details-section">
+                <h3>Detalhes do orçamento</h3>
+                <div className="order-details-grid">
+                  <div className="order-detail-info">
+                    <FileText size={20} color="#9ca3af" />
+                    <div>
+                      <span>Status</span>
+                      <strong>{quote.status}</strong>
+                    </div>
+                  </div>
+                  <div className="order-detail-info">
+                    <CalendarDays size={20} color="#9ca3af" />
+                    <div>
+                      <span>Data</span>
+                      <strong>{quote.createdAt || "Não informado"}</strong>
+                    </div>
+                  </div>
+                  <div className="order-detail-info">
+                    <Clock3 size={20} color="#9ca3af" />
+                    <div>
+                      <span>Validade</span>
+                      <strong>{formatDateShort(quote.validUntil)}</strong>
+                    </div>
+                  </div>
+                  <div className="order-detail-info">
+                    <User size={20} color="#9ca3af" />
+                    <div>
+                      <span>Vendedor</span>
+                      <strong>{sellerName}</strong>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="document-delivery-box">
-                <MapPin size={20} />
-                <div>
-                  <strong>Observações</strong>
-                  <p>{quote.notes || "Sem observações cadastradas para este orçamento."}</p>
+              <div className="order-details-section">
+                <h3>Observações</h3>
+                <div className="document-delivery-box">
+                  <MapPin size={20} />
+                  <div>
+                    <p>{quote.notes || "Sem observações cadastradas para este orçamento."}</p>
+                  </div>
                 </div>
               </div>
-            </section>
+            </>
           ) : null}
 
           {activeTab === "items" ? (
@@ -12470,7 +13110,7 @@ function QuoteDetail({
   );
 }
 
-function BrandBlock({ compact }: { compact: boolean }) {
+function BrandBlock({ compact, tenantName = "GraphFlow" }: { compact: boolean; tenantName?: string }) {
   return (
     <div className={`brand ${compact ? "compact" : ""}`}>
       <Image
@@ -12483,7 +13123,7 @@ function BrandBlock({ compact }: { compact: boolean }) {
         priority
       />
       <div>
-        <strong>GraphFlow</strong>
+        <strong>{tenantName}</strong>
         <span>painel da gráfica</span>
       </div>
     </div>
@@ -12715,7 +13355,7 @@ function FinanceLine({ entry, compact = false }: { entry: FinanceEntry; compact?
     entry.status,
     entry.due,
     entry.category,
-    entry.referenceType && entry.referenceId ? `${entry.referenceType} ${entry.referenceId}` : entry.referenceType,
+    entry.referenceType && entry.referenceId ? `${referenceTypeLabel(entry.referenceType)} ${entry.referenceId}` : referenceTypeLabel(entry.referenceType),
     entry.paymentMethod,
   ]
     .filter(Boolean)
@@ -12866,7 +13506,7 @@ function Modal({
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <button className="modal-scrim" type="button" aria-label="Fechar modal" onClick={onClose} />
       <div
-        className={`modal-panel${mode === "order" ? " modal-panel-order" : ""}${mode === "quote" || mode === "quote-detail" || mode === "order-detail" ? " modal-panel-quote" : ""}`}
+        className={`modal-panel${mode === "order" ? " modal-panel-order" : ""}${mode === "order-detail" ? " modal-panel-order-detail" : ""}${mode === "quote" ? " modal-panel-quote" : ""}${mode === "quote-detail" ? " modal-panel-quote-detail" : ""}${mode === "order-status" ? " modal-panel-order-status" : ""}`}
         ref={panelRef}
       >
         <button className="modal-close icon-button" type="button" aria-label="Fechar" title="Fechar" onClick={onClose}>
@@ -13069,6 +13709,227 @@ function downloadReportFile(filename: string, content: string) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+const entityTypeLabels: Record<string, string> = {
+  order: "Pedidos",
+  payment: "Pagamentos",
+  finance: "Financeiro",
+  client: "Clientes",
+  product: "Produtos",
+  quote: "Orçamentos",
+  user: "Usuários",
+  machine: "Máquinas",
+  sector: "Setores",
+  supplier: "Fornecedores",
+  inventory: "Estoque",
+  file: "Arquivos",
+  notification: "Notificações",
+  production: "Produção",
+  fiscal: "Fiscal",
+  purchase: "Compras",
+  landing: "Landing Page",
+  auth: "Autenticação",
+  settings: "Configurações",
+};
+
+const entityTypeIcons: Record<string, LucideIcon> = {
+  order: ShoppingBag,
+  payment: DollarSign,
+  finance: WalletCards,
+  client: Users,
+  product: Package,
+  quote: FileText,
+  user: UserCog,
+  machine: Cpu,
+  sector: Layers3,
+  supplier: Truck,
+  inventory: Boxes,
+  file: Folder,
+  notification: Bell,
+  production: Factory,
+  fiscal: FileText,
+  purchase: ClipboardList,
+  landing: Globe,
+  auth: LockKeyhole,
+  settings: Settings,
+};
+
+function LogsView() {
+  const [logs, setLogs] = useState<AuditLogRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterEntity, setFilterEntity] = useState("all");
+  const [filterAction, setFilterAction] = useState("all");
+  const [searchText, setSearchText] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const filters: Record<string, string> = {};
+        if (searchText.trim()) filters.search = searchText.trim();
+        if (filterEntity !== "all") filters.entityType = filterEntity;
+        if (filterAction !== "all") filters.action = filterAction;
+        const data = await graphflowApi.listAuditLogs(filters);
+        if (!cancelled) setLogs(data);
+      } catch {
+        // silent
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [filterEntity, filterAction, searchText]);
+
+  const groupedLogs = useMemo(() => {
+    const groups: Record<string, AuditLogRecord[]> = {};
+    for (const log of logs) {
+      const key = log.entityType || "general";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(log);
+    }
+    const sorted = Object.entries(groups).sort((a, b) => b[1][0].createdAt.localeCompare(a[1][0].createdAt));
+    return sorted;
+  }, [logs]);
+
+  const uniqueEntityTypes = useMemo(() => {
+    const types = new Set(logs.map((log) => log.entityType).filter(Boolean));
+    return [...types].sort();
+  }, [logs]);
+
+  const uniqueActions = useMemo(() => {
+    const actions = new Set(logs.map((log) => log.action).filter(Boolean));
+    return [...actions].sort();
+  }, [logs]);
+
+  function formatLogTime(iso: string) {
+    const date = new Date(iso);
+    return date.toLocaleString("pt-BR", {
+      day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  }
+
+  function actionLabel(action: string): string {
+    const map: Record<string, string> = {
+      create: "Criação", update: "Edição", delete: "Exclusão",
+      accept: "Aceite", reject: "Rejeição", cancel: "Cancelamento",
+      move: "Movimentação", pay: "Pagamento", refund: "Estorno",
+      login: "Login", logout: "Logout", export: "Exportação",
+      upload: "Upload", download: "Download", print: "Impressão",
+      send: "Envio", receive: "Recebimento", complete: "Conclusão",
+    };
+    return map[action] ?? action;
+  }
+
+  function actionColor(action: string): string {
+    if (["create", "pay", "complete", "receive", "accept", "upload", "send"].includes(action)) return "#16b981";
+    if (["update", "move", "login", "export", "download", "print"].includes(action)) return "#236dff";
+    if (["delete", "reject", "cancel", "refund", "logout"].includes(action)) return "#ee3045";
+    return "#ff9f1c";
+  }
+
+  return (
+    <div className="logs-view">
+      <div className="logs-view-head">
+        <h2>Logs do sistema</h2>
+        <p>Registro de todas as ações, eventos e alterações no sistema.</p>
+      </div>
+
+      <div className="logs-view-filters">
+        <div className="logs-search">
+          <Search size={16} />
+          <input
+            type="text"
+            placeholder="Buscar em logs..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+        </div>
+        <select value={filterEntity} onChange={(e) => setFilterEntity(e.target.value)}>
+          <option value="all">Todas as entidades</option>
+          {uniqueEntityTypes.map((type) => (
+            <option key={type} value={type}>{entityTypeLabels[type] ?? type}</option>
+          ))}
+        </select>
+        <select value={filterAction} onChange={(e) => setFilterAction(e.target.value)}>
+          <option value="all">Todas as ações</option>
+          {uniqueActions.map((act) => (
+            <option key={act} value={act}>{actionLabel(act)}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="logs-loading">Carregando logs...</div>
+      ) : groupedLogs.length === 0 ? (
+        <div className="logs-empty">
+          <Info size={24} />
+          <p>Nenhum log encontrado.</p>
+        </div>
+      ) : (
+        <div className="logs-sections">
+          {groupedLogs.map(([entityType, entries]) => {
+            const Icon = entityTypeIcons[entityType] ?? Info;
+            return (
+              <section key={entityType} className="logs-section">
+                <header className="logs-section-header">
+                  <span className="logs-section-icon"><Icon size={18} /></span>
+                  <div>
+                    <strong>{entityTypeLabels[entityType] ?? entityType}</strong>
+                    <span>{entries.length} {entries.length === 1 ? "evento" : "eventos"}</span>
+                  </div>
+                </header>
+                <div className="logs-table">
+                  <div className="logs-thead">
+                    <span>Evento / Descrição</span>
+                    <span>Ação</span>
+                    <span>Responsável</span>
+                    <span>Data e hora</span>
+                    <span>IP</span>
+                  </div>
+                  {entries.map((log) => (
+                    <div key={log.id} className="logs-row">
+                      <div className="logs-cell-event">
+                        <strong>{actionLabel(log.action)}</strong>
+                        <span className="logs-entity-id">
+                          {log.entityType === "auth" ? "Autenticação" : `${entityTypeLabels[log.entityType] ?? log.entityType}${log.entityId ? ` #${log.entityId.slice(0, 12)}` : ""}`}
+                        </span>
+                        {log.after && typeof log.after === "object" && "notes" in (log.after as Record<string, unknown>) ? (
+                          <span className="logs-detail">{(log.after as Record<string, unknown>).notes as string}</span>
+                        ) : null}
+                        {log.before && typeof log.before === "object" && "status" in (log.before as Record<string, unknown>) && log.after && typeof log.after === "object" && "status" in (log.after as Record<string, unknown>) ? (
+                          <span className="logs-detail">{(log.before as Record<string, unknown>).status as string} → {(log.after as Record<string, unknown>).status as string}</span>
+                        ) : null}
+                      </div>
+                      <div className="logs-cell-action">
+                        <span className="logs-action-badge" style={{ background: `${actionColor(log.action)}18`, color: actionColor(log.action) }}>
+                          {actionLabel(log.action)}
+                        </span>
+                      </div>
+                      <div className="logs-cell-user">
+                        {log.userId ? (
+                          <span title={log.userId}>{log.userId.slice(0, 16)}</span>
+                        ) : (
+                          <span className="logs-muted">Sistema</span>
+                        )}
+                      </div>
+                      <div className="logs-cell-date">{formatLogTime(log.createdAt)}</div>
+                      <div className="logs-cell-ip">
+                        <span className="logs-muted">{log.ip ?? "—"}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function pointsFromData(data: number[], width: number, height: number) {
