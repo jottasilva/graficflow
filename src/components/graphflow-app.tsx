@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   CircleDollarSign,
   ClipboardList,
   Clock3,
@@ -62,6 +63,7 @@ import {
   Trash2,
   Truck,
   Upload,
+  User,
   UserPlus,
   UserCog,
   Users,
@@ -73,6 +75,8 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { AuthPage } from "@/components/auth-page";
+import { LandingView } from "@/components/landing-view";
+import { ToastProvider, useToast } from "@/components/toast-provider";
 import {
   calculateOrderTotal,
   DEFAULT_PRODUCT_COLORS,
@@ -105,6 +109,8 @@ import {
   type ViewKey,
 } from "@/lib/graphflow-data";
 import { graphflowApi, GraphflowApiError, type DashboardOverview, type ManagementReport } from "@/lib/graphflow-api";
+import { PERMISSION_LABELS } from "@/shared/permissions";
+import type { PermissionKey } from "@/shared/permissions";
 import { createPortal } from "react-dom";
 import {
   useCallback,
@@ -292,7 +298,7 @@ type UserDraft = {
   document: string;
   avatarUrl: string;
   role: UserAccount["role"];
-  permissions: string[];
+  permissions: PermissionKey[];
   sectorIds: string[];
   password: string;
 };
@@ -318,6 +324,7 @@ type ProductDraft = {
   category: string;
   subcategory: string;
   sector: string;
+  machineId: string;
   description: string;
   commercialDescription: string;
   complementaryDescription: string;
@@ -581,13 +588,16 @@ function validateProductFiscalDraft(draft: ProductDraft) {
 
   requiredFields.forEach(([label, value]) => {
     if (typeof value === "number") {
-      if (!Number.isFinite(value) || value < 0) missing.push(label);
+      if (!Number.isFinite(value) || value <= 0) missing.push(label);
       return;
     }
     if (!String(value ?? "").trim()) missing.push(label);
   });
 
-  if (draft.name.trim().length < 2) invalid.push("Nome do produto deve ter pelo menos 2 caracteres.");
+  if (draft.name.trim().length < 2) {
+    missing.push("Nome do produto");
+    if (draft.name.trim().length > 0) invalid.push("Nome do produto deve ter pelo menos 2 caracteres.");
+  }
   if (draft.category.trim().length < 2) invalid.push("Categoria deve ter pelo menos 2 caracteres.");
   if (draft.sku.trim().length > 60) invalid.push("SKU deve ter no maximo 60 caracteres.");
   if (draft.commercialDescription.trim().length > 120) invalid.push("Descricao comercial deve ter no maximo 120 caracteres.");
@@ -638,11 +648,12 @@ function validateProductFiscalDraft(draft: ProductDraft) {
 function productFromDraft(draft: ProductDraft, id: string): Product {
   return {
     id,
-    sku: normalizeSku(draft.sku) || id,
+    sku: normalizeSku(draft.sku) || id.toUpperCase(),
     name: draft.name.trim(),
     category: draft.category.trim() || "Geral",
     subcategory: draft.subcategory.trim(),
     sector: draft.sector,
+    machineId: draft.machineId || undefined,
     description: draft.description.trim(),
     commercialDescription: draft.commercialDescription.trim() || draft.name.trim(),
     complementaryDescription: draft.complementaryDescription.trim(),
@@ -731,7 +742,7 @@ const defaultUserDraft: UserDraft = {
   document: "",
   avatarUrl: "",
   role: "OPERATOR",
-  permissions: ["dashboard:read", "orders:read", "production:read"],
+  permissions: ["dashboard:read" as PermissionKey, "orders:read" as PermissionKey, "production:read" as PermissionKey],
   sectorIds: [],
   password: "",
 };
@@ -758,6 +769,7 @@ const defaultProductDraft: ProductDraft = {
   category: "Papelaria",
   subcategory: "",
   sector: "Impressão",
+  machineId: "",
   description: "",
   commercialDescription: "",
   complementaryDescription: "",
@@ -1006,7 +1018,7 @@ const navSections: Array<{ id: string; label: string; items: ViewKey[] }> = [
   {
     id: "management",
     label: "Relacionamento e gestão",
-    items: ["clients", "users", "quotes", "finance", "settings"],
+    items: ["clients", "users", "quotes", "finance", "landing", "settings"],
   },
 ];
 
@@ -1215,19 +1227,26 @@ export function GraphFlowApp() {
     }, 4000);
   }, []);
 
-  const createNotification = useCallback((item: Omit<NotificationItem, "id" | "read" | "time">) => {
+  const dismissToast = useCallback((id: string) => {
+    setToasts((current) => current.filter((t) => t.id !== id));
+  }, []);
+
+  const createNotification = useCallback((item: Omit<NotificationItem, "id" | "read" | "time"> & { silent?: boolean }) => {
     const fields = normalizeNotificationFields(item.fields ?? extractNotificationFields(item.message));
+    const { silent, ...rest } = item;
     setNotifications((current) => [
       {
         id: createClientId("not"),
         time: "agora",
         read: false,
-        ...item,
+        ...rest,
         fields,
       },
       ...current,
     ]);
-    addToast({ ...item, fields });
+    if (!silent) {
+      addToast({ ...rest, fields });
+    }
   }, [addToast]);
 
   function normalizeNotificationFields(fields?: string[]) {
@@ -1246,6 +1265,7 @@ export function GraphFlowApp() {
       category: product.category,
       subcategory: product.subcategory ?? "",
       sector: product.sector,
+      machineId: product.machineId ?? "",
       description: product.description ?? "",
       commercialDescription: product.commercialDescription ?? product.name,
       complementaryDescription: product.complementaryDescription ?? "",
@@ -1281,11 +1301,13 @@ export function GraphFlowApp() {
   }
 
   function stagesFromSectors(remoteSectors: Sector[]): ProductionStage[] {
-    return remoteSectors.map((sector, index) => ({
-      id: sector.id,
-      name: sector.name,
-      color: stagePalette[index % stagePalette.length],
-    }));
+    return [...remoteSectors]
+      .sort((a, b) => a.order - b.order)
+      .map((sector, index) => ({
+        id: sector.id,
+        name: sector.name,
+        color: stagePalette[index % stagePalette.length],
+      }));
   }
 
   const refreshWorkspace = useCallback(async () => {
@@ -1482,6 +1504,7 @@ export function GraphFlowApp() {
     const noticeTimer = window.setTimeout(() => {
       createNotification({
         tone: "info",
+        silent: true,
         title: "Complete seu cadastro",
         message: "Revise telefone, endereco, setor e dados operacionais para liberar o perfil completo.",
       });
@@ -1766,6 +1789,7 @@ export function GraphFlowApp() {
             type: "Arte",
             linkedTo: `${nextOrder.number ?? nextOrder.id} · ${primaryProduct.name}`,
             size: "arquivo externo",
+            url: orderDraft.artFileUrl.trim() || undefined,
           }).catch(() => null);
         }
         await refreshWorkspace();
@@ -2826,6 +2850,7 @@ export function GraphFlowApp() {
       return;
     }
 
+    const nextOrder = sectors.length;
     setSectors((current) => [
       {
         id: `sec-${Date.now()}`,
@@ -2834,6 +2859,7 @@ export function GraphFlowApp() {
         capacity: 0,
         sla: "100%",
         lead: "0h",
+        order: nextOrder,
       },
       ...current,
     ]);
@@ -2953,6 +2979,38 @@ export function GraphFlowApp() {
         machine.sector === sectorToRemove.name ? { ...machine, sector: fallbackSector.name } : machine,
       ),
     );
+  }
+
+  async function handleSetSectorOrder(sectorId: string, newPosition: number) {
+    const sorted = [...sectors].sort((a, b) => a.order - b.order);
+    const targetIndex = sorted.findIndex((s) => s.id === sectorId);
+    if (targetIndex === -1) return;
+    const clamped = Math.max(0, Math.min(sorted.length - 1, newPosition));
+    if (clamped === targetIndex) return;
+
+    const item = sorted[targetIndex];
+    sorted.splice(targetIndex, 1);
+    sorted.splice(clamped, 0, item);
+    const reordered = sorted.map((s, i) => ({ ...s, order: i }));
+
+    if (graphflowApi.enabled()) {
+      try {
+        await Promise.all(
+          reordered.map((s) => graphflowApi.updateSector(s.id, { kanbanOrder: s.order })),
+        );
+        await refreshWorkspace();
+      } catch (error) {
+        createNotification({
+          tone: "danger",
+          title: "Ordem nao atualizada",
+          message: error instanceof Error ? error.message : "Falha ao conectar com o backend.",
+        });
+      }
+      return;
+    }
+
+    setSectors(reordered);
+    setProductionStages(stagesFromSectors(reordered));
   }
 
   async function linkProductToSector(productId: string, sectorId: string) {
@@ -3649,36 +3707,39 @@ export function GraphFlowApp() {
   );
 
   if (authChecking) {
-    return <AuthLoadingScreen />;
+    return <ToastProvider><AuthLoadingScreen /></ToastProvider>;
   }
 
   if (!authenticated) {
     return (
-      <LoginScreen
-        onSubmit={async () => {
-          const session = graphflowApi.enabled()
-            ? await graphflowApi.session().catch(() => null)
-            : null;
-          setAuthUserId(session?.user.id ?? null);
-          setAuthSessionUser(
-            session
-              ? {
-                  id: session.user.id,
-                  tenantId: session.user.tenantId,
-                  email: session.user.email,
-                  role: session.user.role,
-                }
-              : null,
-          );
-          setAuthenticated(true);
-          await refreshWorkspace();
-          setView("dashboard");
-        }}
-      />
+      <ToastProvider>
+        <LoginScreen
+          onSubmit={async () => {
+            const session = graphflowApi.enabled()
+              ? await graphflowApi.session().catch(() => null)
+              : null;
+            setAuthUserId(session?.user.id ?? null);
+            setAuthSessionUser(
+              session
+                ? {
+                    id: session.user.id,
+                    tenantId: session.user.tenantId,
+                    email: session.user.email,
+                    role: session.user.role,
+                  }
+                : null,
+            );
+            setAuthenticated(true);
+            await refreshWorkspace();
+            setView("dashboard");
+          }}
+        />
+      </ToastProvider>
     );
   }
 
   return (
+    <ToastProvider>
     <div className={`app-shell theme-${view}`} style={appThemeStyle}>
       <Sidebar
         view={view}
@@ -3706,8 +3767,12 @@ export function GraphFlowApp() {
           onOpenSidebar={() => setSidebarOpen(true)}
           onCreateOrder={() => openModal("order")}
           onNotifications={() => setView("notifications")}
-          onLogout={() => {
-            graphflowApi.logout().catch(() => undefined);
+          onLogout={async () => {
+            try {
+              await graphflowApi.logout();
+            } catch {
+              // continua para limpar estado local mesmo se a API falhar
+            }
             setAuthUserId(null);
             setAuthSessionUser(null);
             setAuthenticated(false);
@@ -3794,7 +3859,7 @@ export function GraphFlowApp() {
 
           {view === "production" ? (
             <ProductionView
-              orders={filteredOrders}
+              orders={orders}
               stages={productionStages}
               focusCreateSignal={productionStageFocusSignal}
               onCreateStage={createProductionStage}
@@ -3936,11 +4001,47 @@ export function GraphFlowApp() {
               sectors={sectors}
               orders={orders}
               machines={machines}
-              products={products}
+              users={users}
+              canManageUsers={
+                !loggedUser ||
+                loggedUser?.permissions.includes("*") === true ||
+                loggedUser?.permissions.includes("users:write") === true ||
+                loggedUser?.role === "ADMIN"
+              }
               onViewChange={setView}
               onUpdateSector={updateSector}
               onDeleteSector={deleteSector}
-              onLinkProduct={linkProductToSector}
+              onAddUserToSector={async (userId, sectorId) => {
+                const user = users.find((u) => u.id === userId);
+                if (!user) return;
+                const nextSectorIds = [...new Set([...user.sectorIds, sectorId])];
+                try {
+                  const updated = await graphflowApi.updateUser(userId, { sectorIds: nextSectorIds });
+                  setUsers((current) => current.map((u) => (u.id === userId ? updated : u)));
+                } catch (error) {
+                  createNotification({
+                    title: "Erro ao vincular usuário",
+                    message: error instanceof Error ? error.message : "Tente novamente.",
+                    tone: "error",
+                  });
+                }
+              }}
+              onRemoveUserFromSector={async (userId, sectorId) => {
+                const user = users.find((u) => u.id === userId);
+                if (!user) return;
+                const nextSectorIds = user.sectorIds.filter((id) => id !== sectorId);
+                try {
+                  const updated = await graphflowApi.updateUser(userId, { sectorIds: nextSectorIds });
+                  setUsers((current) => current.map((u) => (u.id === userId ? updated : u)));
+                } catch (error) {
+                  createNotification({
+                    title: "Erro ao remover vínculo",
+                    message: error instanceof Error ? error.message : "Tente novamente.",
+                    tone: "error",
+                  });
+                }
+              }}
+              onSetSectorOrder={handleSetSectorOrder}
             />
           ) : null}
 
@@ -3988,6 +4089,10 @@ export function GraphFlowApp() {
             />
           ) : null}
 
+          {view === "landing" ? (
+            <LandingView />
+          ) : null}
+
           {view === "settings" ? (
             <SettingsView dark={dark} onToggleTheme={() => setDark((current) => !current)} onRefreshData={refreshData} />
           ) : null}
@@ -4008,6 +4113,24 @@ export function GraphFlowApp() {
             onUploadFile={uploadFile}
             onSave={saveOrderDetail}
             onAddArtFile={addOrderArtFile}
+            onAddPayment={async (amount, method) => {
+              if (graphflowApi.enabled()) {
+                const savedEntry = await graphflowApi.createFinanceEntry({
+                  label: `Pagamento - Pedido ${selectedOrder.number ?? selectedOrder.id}`,
+                  type: "Entrada",
+                  value: amount,
+                  due: new Date().toISOString().split("T")[0],
+                  status: "Recebido",
+                  category: "Vendas",
+                  referenceType: "order",
+                  referenceId: selectedOrder.id,
+                  paymentMethod: method,
+                  notes: "",
+                  attachmentUrl: "",
+                });
+                setFinance([...finance, savedEntry]);
+              }
+            }}
           />
         ) : null}
 
@@ -4049,6 +4172,7 @@ export function GraphFlowApp() {
             draft={productDraft}
             inventory={inventory}
             sectors={sectors}
+            machines={machines}
             title={modalMode === "product-edit" ? "Editar Produto" : "Novo Produto"}
             subtitle={
               modalMode === "product-edit"
@@ -4115,7 +4239,10 @@ export function GraphFlowApp() {
           <FileForm draft={fileDraft} onUploadFile={uploadFile} onDraftChange={setFileDraft} onSubmit={createFile} />
         ) : null}
       </Modal>
+
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
+    </ToastProvider>
   );
 }
 
@@ -5200,7 +5327,7 @@ function ProductionView({
       <div className="production-kanban" aria-label="Kanban de produção">
         {stages.map((stage) => {
           const stageOrders = stage.status
-            ? orders.filter((order) => !order.stageId && order.status === stage.status)
+            ? orders.filter((order) => order.status === stage.status)
             : orders.filter((order) => order.stageId === stage.id);
           const isEditing = editingStage?.id === stage.id;
 
@@ -5949,42 +6076,9 @@ function SupportChatMessage({
   );
 }
 
-const permissionOptions: Array<{ key: string; label: string }> = [
-  { key: "dashboard:read", label: "Dashboard" },
-  { key: "orders:read", label: "Pedidos ver" },
-  { key: "orders:write", label: "Pedidos editar" },
-  { key: "production:read", label: "Producao ver" },
-  { key: "production:write", label: "Producao editar" },
-  { key: "clients:read", label: "Clientes ver" },
-  { key: "clients:write", label: "Clientes editar" },
-  { key: "products:read", label: "Produtos ver" },
-  { key: "products:write", label: "Produtos editar" },
-  { key: "inventory:read", label: "Estoque ver" },
-  { key: "inventory:write", label: "Estoque editar" },
-  { key: "machines:read", label: "Maquinas ver" },
-  { key: "machines:write", label: "Maquinas editar" },
-  { key: "sectors:read", label: "Setores ver" },
-  { key: "sectors:write", label: "Setores editar" },
-  { key: "quotes:read", label: "Orcamentos ver" },
-  { key: "quotes:write", label: "Orcamentos editar" },
-  { key: "finance:read", label: "Financeiro ver" },
-  { key: "finance:write", label: "Financeiro editar" },
-  { key: "suppliers:read", label: "Fornecedores ver" },
-  { key: "suppliers:write", label: "Fornecedores editar" },
-  { key: "purchases:read", label: "Compras ver" },
-  { key: "purchases:write", label: "Compras editar" },
-  { key: "payments:read", label: "Pagamentos ver" },
-  { key: "payments:write", label: "Pagamentos editar" },
-  { key: "fiscal:read", label: "Fiscal ver" },
-  { key: "fiscal:write", label: "Fiscal editar" },
-  { key: "audit:read", label: "Auditoria" },
-  { key: "reports:read", label: "Relatorios" },
-  { key: "files:read", label: "Arquivos ver" },
-  { key: "files:write", label: "Arquivos editar" },
-  { key: "users:read", label: "Usuarios ver" },
-  { key: "users:write", label: "Usuarios editar" },
-  { key: "settings:read", label: "Configuracoes" },
-];
+const permissionOptions: Array<{ key: PermissionKey; label: string }> = (
+  Object.keys(PERMISSION_LABELS) as PermissionKey[]
+).map((key) => ({ key, label: PERMISSION_LABELS[key] }));
 
 function UsersView({
   users,
@@ -6378,7 +6472,7 @@ function UserProfileDrawer({
     onDraftChange({ address: { ...address, ...update } });
   }
 
-  function togglePermission(permission: string) {
+  function togglePermission(permission: PermissionKey) {
     onDraftChange({
       permissions: activePermissions.includes(permission)
         ? activePermissions.filter((item) => item !== permission)
@@ -7586,30 +7680,189 @@ function MachinesView({
   );
 }
 
+function SectorUsersPanel({
+  sector,
+  users,
+  canManage,
+  onAddUser,
+  onRemoveUser,
+}: {
+  sector: Sector;
+  users: UserAccount[];
+  canManage: boolean;
+  onAddUser: (userId: string) => Promise<void>;
+  onRemoveUser: (userId: string) => Promise<void>;
+}) {
+  const linked = users.filter((u) => u.sectorIds.includes(sector.id));
+  const available = users.filter((u) => !u.sectorIds.includes(sector.id) && u.type !== "CLIENT");
+  const [selectedId, setSelectedId] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  async function handleAdd() {
+    const id = selectedId || available[0]?.id;
+    if (!id) return;
+    setAdding(true);
+    try {
+      await onAddUser(id);
+      setSelectedId("");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleRemove(userId: string) {
+    setRemoving(userId);
+    try {
+      await onRemoveUser(userId);
+    } finally {
+      setRemoving(null);
+    }
+  }
+
+  return (
+    <div style={{
+      border: "1px solid var(--line)",
+      borderRadius: 8,
+      padding: "8px 10px",
+      marginTop: 10,
+      background: "var(--panel-2)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+        <Users size={11} color="var(--primary)" />
+        <span style={{ fontSize: 10, fontWeight: 650, color: "var(--primary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          Usuários vinculados
+        </span>
+      </div>
+
+      {linked.length === 0 ? (
+        <p style={{ fontSize: 11, color: "var(--muted-2)", margin: "0 0 6px" }}>Nenhum usuário vinculado.</p>
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+          {linked.map((user) => (
+            <span
+              key={user.id}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                border: "1px solid var(--line)",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: 11,
+                fontWeight: 500,
+                color: "var(--primary)",
+                background: "color-mix(in srgb, var(--primary) 8%, var(--panel))",
+                lineHeight: 1.4,
+              }}
+            >
+              <button
+                type="button"
+                title={`Remover ${user.name}`}
+                disabled={removing === user.id}
+                onClick={() => handleRemove(user.id)}
+                aria-label={`Remover ${user.name}`}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: removing === user.id ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  color: removing === user.id ? "var(--line)" : "var(--muted)",
+                  lineHeight: 1,
+                }}
+              >
+                <X size={10} />
+              </button>
+              {user.name.split(" ")[0]}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        <select
+          aria-label={`Vincular usuário ao setor ${sector.name}`}
+          value={selectedId || available[0]?.id || ""}
+          disabled={adding || available.length === 0}
+          onChange={(e) => setSelectedId(e.target.value)}
+          style={{
+            flex: 1,
+            fontSize: 11,
+            padding: "3px 5px",
+            border: "1px solid var(--line)",
+            borderRadius: 4,
+            background: "var(--panel)",
+            color: "var(--foreground)",
+          }}
+        >
+          {available.length ? (
+            available.map((u) => (
+              <option key={u.id} value={u.id}>{u.name}</option>
+            ))
+          ) : (
+            <option value="">Todos já vinculados</option>
+          )}
+        </select>
+        <button
+          type="button"
+          disabled={adding || available.length === 0}
+          onClick={handleAdd}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 3,
+            fontSize: 11,
+            fontWeight: 600,
+            padding: "3px 8px",
+            border: "1px solid var(--line)",
+            borderRadius: 4,
+            background: adding || available.length === 0
+              ? "var(--panel-2)"
+              : "color-mix(in srgb, var(--primary) 10%, var(--panel))",
+            color: adding || available.length === 0 ? "var(--muted-2)" : "var(--primary)",
+            cursor: adding || available.length === 0 ? "not-allowed" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <UserPlus size={11} />
+          {adding ? "…" : "Vincular"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SectorsView({
   sectors,
   orders,
   machines,
-  products,
+  users,
+  canManageUsers,
   onViewChange,
   onUpdateSector,
   onDeleteSector,
-  onLinkProduct,
+  onAddUserToSector,
+  onRemoveUserFromSector,
+  onSetSectorOrder,
 }: {
   sectors: Sector[];
   orders: Order[];
   machines: Machine[];
-  products: Product[];
+  users: UserAccount[];
+  canManageUsers: boolean;
   onViewChange: (view: ViewKey) => void;
   onUpdateSector: (
     sectorId: string,
     update: Partial<Pick<Sector, "name" | "capacity" | "sla" | "lead">>,
   ) => void;
   onDeleteSector: (sectorId: string) => void;
-  onLinkProduct: (productId: string, sectorId: string) => void;
+  onAddUserToSector: (userId: string, sectorId: string) => Promise<void>;
+  onRemoveUserFromSector: (userId: string, sectorId: string) => Promise<void>;
+  onSetSectorOrder: (sectorId: string, newPosition: number) => void;
 }) {
   const [editingSector, setEditingSector] = useState<Sector | null>(null);
-  const [linkDraft, setLinkDraft] = useState<Record<string, string>>({});
   const sectorTones = ["#6b45ff", "#315dff", "#149954", "#ff7308"];
   const sectorIcons = [ShoppingBag, Wrench, Settings, ClipboardList];
 
@@ -7646,13 +7899,9 @@ function SectorsView({
       </div>
 
       <div className="sector-management-grid">
-        {sectors.map((sector, index) => {
-          const metrics = sectorLiveMetrics(sector, orders, machines, products);
-          const linkedProducts = metrics.linkedProducts;
-          const availableProducts = products.filter(
-            (product) => !sameProductionSector(product.sector, sector.name),
-          );
-          const selectedProductId = linkDraft[sector.id] ?? availableProducts[0]?.id ?? "";
+        {[...sectors].sort((a, b) => a.order - b.order).map((sector, index) => {
+          const metrics = sectorLiveMetrics(sector, orders, machines, []);
+          const linkedUsersCount = users.filter((u) => u.sectorIds.includes(sector.id)).length;
           const isEditing = editingSector?.id === sector.id;
           const tone = sectorTones[index % sectorTones.length];
           const Icon = sectorIcons[index % sectorIcons.length];
@@ -7664,6 +7913,21 @@ function SectorsView({
                   <Icon size={26} />
                 </span>
                 <div className="card-actions">
+                  <label className="sector-order-label" title="Ordem do setor">
+                    <input
+                      className="sector-order-input"
+                      type="number"
+                      min={1}
+                      max={sectors.length}
+                      value={index + 1}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        if (val >= 1 && val <= sectors.length) {
+                          onSetSectorOrder(sector.id, val - 1);
+                        }
+                      }}
+                    />
+                  </label>
                   <button className="icon-button" type="button" title="Editar setor" onClick={() => setEditingSector(sector)}>
                     <Pencil size={16} />
                   </button>
@@ -7785,72 +8049,20 @@ function SectorsView({
                     </span>
                     <span>
                       <i>
-                        <Package size={20} />
+                        <Users size={20} />
                       </i>
-                      <strong>{linkedProducts.length}</strong>
-                      cadastros
+                      <strong>{linkedUsersCount}</strong>
+                      usuários
                     </span>
                   </div>
 
-                  <div className="linked-products">
-                    <strong>Cadastros vinculados</strong>
-                    {linkedProducts.length ? (
-                      <div>
-                        {linkedProducts.slice(0, 5).map((product) => (
-                          <span key={product.id}>{product.name}</span>
-                        ))}
-                      </div>
-                    ) : (
-                      <>
-                        <p>Nenhum cadastro vinculado.</p>
-                        <div className="sector-empty-state" aria-hidden="true">
-                          <FileText size={48} />
-                          <span>
-                            <X size={14} />
-                          </span>
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="sector-link-row">
-                    <select
-                      aria-label={`Vincular cadastro ao setor ${sector.name}`}
-                      value={selectedProductId}
-                      onChange={(event) =>
-                        setLinkDraft((current) => ({
-                          ...current,
-                          [sector.id]: event.target.value,
-                        }))
-                      }
-                    >
-                      {availableProducts.length ? (
-                        availableProducts.map((product) => (
-                          <option value={product.id} key={product.id}>
-                            {product.name}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="">Sem cadastros livres</option>
-                      )}
-                    </select>
-                    <button
-                      className="ghost-button compact sector-link-button"
-                      type="button"
-                      disabled={!selectedProductId}
-                      onClick={() => {
-                        if (!selectedProductId) {
-                          return;
-                        }
-
-                        onLinkProduct(selectedProductId, sector.id);
-                        setLinkDraft((current) => ({ ...current, [sector.id]: "" }));
-                      }}
-                    >
-                      <Package size={16} />
-                      Vincular
-                    </button>
-                  </div>
+                  <SectorUsersPanel
+                    sector={sector}
+                    users={users}
+                    canManage={canManageUsers}
+                    onAddUser={(userId) => onAddUserToSector(userId, sector.id)}
+                    onRemoveUser={(userId) => onRemoveUserFromSector(userId, sector.id)}
+                  />
                 </>
               )}
             </article>
@@ -7864,7 +8076,7 @@ function SectorsView({
         </span>
         <div>
           <strong>Dica</strong>
-          <p>Mantenha os cadastros vinculados atualizados para garantir precisão nos indicadores de capacidade e SLA.</p>
+          <p>Vincule usuários aos setores para controlar o acesso por área produtiva e facilitar a atribuição de pedidos.</p>
         </div>
         <button className="ghost-button" type="button" onClick={() => onViewChange("reports")}>
           Saiba mais
@@ -10529,7 +10741,7 @@ function UserForm({
   onDraftChange: (draft: UserDraft) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  function togglePermission(permission: string) {
+  function togglePermission(permission: PermissionKey) {
     onDraftChange({
       ...draft,
       permissions: draft.permissions.includes(permission)
@@ -10675,6 +10887,7 @@ function ProductForm({
   draft,
   inventory,
   sectors,
+  machines,
   title,
   subtitle,
   submitLabel,
@@ -10685,6 +10898,7 @@ function ProductForm({
   draft: ProductDraft;
   inventory: InventoryItem[];
   sectors: Sector[];
+  machines: Machine[];
   title: string;
   subtitle: string;
   submitLabel: string;
@@ -10740,6 +10954,19 @@ function ProductForm({
                 {sector.name}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          Máquina (Opcional)
+          <select value={draft.machineId} onChange={(event) => onDraftChange({ ...draft, machineId: event.target.value })}>
+            <option value="">Nenhuma / Automático</option>
+            {machines
+              .filter((machine) => machine.sector === draft.sector)
+              .map((machine) => (
+                <option key={machine.id} value={machine.id}>
+                  {machine.name}
+                </option>
+              ))}
           </select>
         </label>
         <label>
@@ -11340,33 +11567,76 @@ function DocumentFinanceSummary({
   subtotal,
   paymentEntries,
   label = "Adicionar pagamento",
+  onAddPayment,
 }: {
   subtotal: number;
   paymentEntries: FinanceEntry[];
   label?: string;
+  onAddPayment?: (amount: number, method: string) => void | Promise<void>;
 }) {
+  const [isAdding, setIsAdding] = useState(false);
   const paidAmount = paidAmountFrom(paymentEntries);
   const pendingAmount = Math.max(0, subtotal - paidAmount);
+  const [amount, setAmount] = useState(pendingAmount);
+  const [method, setMethod] = useState("Pix");
 
   return (
     <aside className="document-finance-card">
-      <h3>Resumo Financeiro</h3>
-      <div>
-        <span>Subtotal:</span>
+      <h3>Resumo financeiro</h3>
+      <div className="finance-summary-line">
+        <span>Subtotal</span>
         <strong>{formatCurrency(subtotal)}</strong>
       </div>
-      <div>
-        <span>Pago:</span>
+      <div className="finance-summary-line">
+        <span>Descontos</span>
+        <strong>{formatCurrency(0)}</strong>
+      </div>
+      <div className="finance-summary-line">
+        <span>Pagamentos</span>
         <strong>{formatCurrency(paidAmount)}</strong>
       </div>
       <div className="document-finance-balance">
-        <span>Saldo devedor:</span>
+        <span>Saldo devedor</span>
         <strong>{formatCurrency(pendingAmount)}</strong>
       </div>
-      <button className="primary-button compact" type="button">
-        <CircleDollarSign size={16} />
-        {label}
-      </button>
+      {isAdding ? (
+        <form
+          className="document-finance-add"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (onAddPayment) {
+              void onAddPayment(amount, method);
+              setIsAdding(false);
+            }
+          }}
+          style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "16px" }}
+        >
+          <NumberField label="Valor" value={amount} onChange={setAmount} />
+          <label>
+            Método
+            <select value={method} onChange={(e) => setMethod(e.target.value)}>
+              <option value="Pix">Pix</option>
+              <option value="Cartão de Crédito">Cartão de Crédito</option>
+              <option value="Cartão de Débito">Cartão de Débito</option>
+              <option value="Dinheiro">Dinheiro</option>
+              <option value="Boleto">Boleto</option>
+            </select>
+          </label>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button className="ghost-button compact wide" type="button" onClick={() => setIsAdding(false)}>
+              Cancelar
+            </button>
+            <button className="primary-button compact wide" type="submit" disabled={!onAddPayment || amount <= 0}>
+              Salvar
+            </button>
+          </div>
+        </form>
+      ) : (
+        <button className="primary-button compact blue-button" style={{ width: "100%", padding: "12px", justifyContent: "center" }} type="button" onClick={() => { setAmount(pendingAmount); setIsAdding(true); }} disabled={pendingAmount <= 0 || !onAddPayment}>
+          <CircleDollarSign size={16} />
+          {label}
+        </button>
+      )}
     </aside>
   );
 }
@@ -11427,6 +11697,7 @@ function OrderDetail({
   onUploadFile,
   onSave,
   onAddArtFile,
+  onAddPayment,
 }: {
   order: Order;
   clients: Client[];
@@ -11439,6 +11710,7 @@ function OrderDetail({
   onUploadFile: (file: File, scope: UploadScope) => Promise<UploadedFile>;
   onSave: (orderId: string, update: OrderEditDraft & { clientEmail?: string; clientPhone?: string; clientDocument?: string }) => void | Promise<void>;
   onAddArtFile: (order: Order, input: { productName: string; name: string; url: string }) => void | Promise<void>;
+  onAddPayment?: (amount: number, method: string) => void | Promise<void>;
 }) {
   const [draft, setDraft] = useState<OrderEditDraft & { clientEmail: string; clientPhone: string; clientDocument: string }>({
     id: order.id,
@@ -11458,19 +11730,37 @@ function OrderDetail({
   });
   const [artDraft, setArtDraft] = useState({ productName: order.product, name: "", url: "" });
   const linkedFiles = files.filter((file) => {
-    const haystack = normalizeText(`${file.linkedTo} ${file.name}`);
-    return haystack.includes(normalizeText(order.number ?? order.id)) || haystack.includes(normalizeText(order.id));
+    const haystack = normalizeText(`${file.linkedTo ?? ""} ${file.name}`);
+    const orderNum = normalizeText(order.number ?? order.id);
+    const orderId  = normalizeText(order.id);
+    return haystack.includes(orderNum) || haystack.includes(orderId);
   });
-  const artFiles = [
-    ...(order.artFiles ?? []),
+
+  // Todos os arquivos do pedido — com ou sem URL
+  const allOrderFiles = [
+    ...(order.artFiles ?? []).map((f) => ({
+      id: f.id,
+      productName: f.productName ?? "",
+      name: f.name,
+      url: f.url && f.url !== "#" ? f.url : "",
+      size: f.size ?? "",
+    })),
     ...linkedFiles.map((file) => ({
       id: file.id,
-      productName: file.linkedTo,
+      productName: file.linkedTo ?? "",
       name: file.name,
       url: file.url ?? "",
-      size: file.size,
+      size: file.size ?? "",
     })),
   ];
+
+  // Remove duplicatas pelo nome
+  const seen = new Set<string>();
+  const artFiles = allOrderFiles.filter((f) => {
+    if (seen.has(f.name)) return false;
+    seen.add(f.name);
+    return true;
+  });
   const [shareFeedback, setShareFeedback] = useState("");
   const receiptNumber = order.number ?? order.id;
   const [activeTab, setActiveTab] = useState<DocumentDetailTab>("summary");
@@ -11523,44 +11813,40 @@ function OrderDetail({
 
   return (
     <div className="modal-form order-detail">
-      <ModalHeader icon={ClipboardList} title={`Pedido ${order.number ?? order.id}`} subtitle="Detalhes do pedido em produção." />
-      <section className="document-client-bar">
-        <div>
-          <span>ID</span>
-          <strong>{receiptNumber}</strong>
+      <ModalHeader icon={ClipboardList} title={`Pedido ${order.number ?? order.id}`}>
+        <div className="order-detail-header-status">
+          <StatusPill status={order.status} />
         </div>
-        <div>
-          <span>Cliente</span>
-          <strong>{client?.company ?? order.customer}</strong>
+      </ModalHeader>
+      
+      <section className="document-client-bar-new">
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><User size={20} /></div>
+          <div className="client-bar-info">
+            <span>Cliente</span>
+            <strong>{client?.company ?? order.customer}</strong>
+          </div>
         </div>
-        <div>
-          <span>Documento</span>
-          <strong>{client?.document || "Não informado"}</strong>
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><CalendarDays size={20} /></div>
+          <div className="client-bar-info">
+            <span>Entrega</span>
+            <strong>{order.delivery}</strong>
+          </div>
         </div>
-        <div>
-          <span>Telefone</span>
-          <strong>{client?.phone || client?.whatsapp || "Não informado"}</strong>
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><Phone size={20} /></div>
+          <div className="client-bar-info">
+            <span>Telefone</span>
+            <strong>{client?.phone || client?.whatsapp || "Não informado"}</strong>
+          </div>
         </div>
-        <div>
-          <span>E-mail</span>
-          <strong>{client?.email || "Não informado"}</strong>
-        </div>
-        <div className="document-client-actions">
-          <button className="icon-button" type="button" title="Enviar e-mail" disabled={!client?.email}>
-            <Mail size={16} />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            title="Copiar link público"
-            disabled={!publicLink}
-            onClick={() => publicLink && void navigator.clipboard?.writeText(publicLink)}
-          >
-            <Link2 size={16} />
-          </button>
-          <button className="icon-button" type="button" title="Imprimir" onClick={handlePrintReceipt}>
-            <Download size={16} />
-          </button>
+        <div className="client-bar-card">
+          <div className="client-bar-icon"><Mail size={20} /></div>
+          <div className="client-bar-info">
+            <span>E-mail</span>
+            <strong>{client?.email || "Não informado"}</strong>
+          </div>
         </div>
       </section>
 
@@ -11579,91 +11865,172 @@ function OrderDetail({
         <div className="document-detail-main">
           {activeTab === "summary" ? (
             <>
-      <section className="order-receipt-card">
-        <div className="order-receipt-top">
-          <div>
-            <span>Recibo do pedido</span>
-            <h2>{receiptNumber}</h2>
-            <p>{statusMeta[order.status].label}</p>
-          </div>
+      <div className="order-items-section">
+        <div className="order-items-top">
+          <h3>Itens do pedido</h3>
           <div className="order-receipt-actions">
             <button className="ghost-button compact" type="button" onClick={handlePrintReceipt}>
               <Download size={16} />
               PDF
             </button>
-            <button className="primary-button compact" type="button" onClick={() => void handleShareReceipt()}>
+            <button className="primary-button compact blue-button" type="button" onClick={() => void handleShareReceipt()}>
               <Send size={16} />
               Compartilhar
             </button>
           </div>
         </div>
 
-        <div className="order-receipt-customer">
-          <div>
-            <span>Cliente</span>
-            <strong>{order.customer}</strong>
-          </div>
-          <div>
-            <span>Entrega</span>
-            <strong>{order.delivery}</strong>
-          </div>
-          <div>
-            <span>Total</span>
-            <strong>{formatCurrency(order.total)}</strong>
-          </div>
-        </div>
-
-        <div className="order-receipt-items">
-          <div className="order-receipt-item head">
-            <span>Item</span>
-            <span>Qtd.</span>
+        <div className="order-items-table">
+          <div className="order-items-thead">
+            <span>Produto</span>
+            <span>Quantidade</span>
             <span>Setor</span>
+            <span>Valor unitário</span>
             <span>Total</span>
+            <span>Arquivo</span>
           </div>
-          <div className="order-receipt-item">
-            <strong>{order.product}</strong>
-            <span>{formatNumber(order.quantity)} un</span>
-            <span>{order.sector}</span>
+          <div className="order-items-tbody">
+            {(order.items && order.items.length > 0 ? order.items : [{
+              id: order.itemId ?? order.id,
+              productId: order.productId,
+              productName: order.product,
+              description: order.product,
+              quantity: order.quantity,
+              unitPrice: order.total / Math.max(1, order.quantity),
+              total: order.total,
+              sector: order.sector,
+            }]).map((item, itemIndex, itemList) => {
+              // Arquivos por nome de produto
+              const byName = artFiles.filter(
+                (f) => normalizeText(f.productName).includes(normalizeText(item.productName || item.description)) ||
+                       normalizeText(item.productName || item.description).includes(normalizeText(f.productName))
+              );
+              // Se não achou por nome mas é item único, pega todos
+              const allItemFiles = byName.length > 0
+                ? byName
+                : itemList.length === 1
+                  ? artFiles
+                  : [];
+              return (
+                <div className="order-items-row" key={item.id}>
+                  <div className="order-item-product">
+                    <div className="order-item-thumb">
+                      <Package size={24} color="#9ca3af" />
+                    </div>
+                    <span>{item.productName || item.description}</span>
+                  </div>
+                  <span className="order-item-qty">{formatNumber(item.quantity)} un</span>
+                  <span className="order-item-sector">{item.sector}</span>
+                  <span className="order-item-unit-price">{formatCurrency(item.unitPrice || (item.total / Math.max(1, item.quantity)))}</span>
+                  <strong className="order-item-total">{formatCurrency(item.total)}</strong>
+                  <div className="order-item-files">
+                    {allItemFiles.map((file) => (
+                      <button
+                        key={file.id}
+                        className="ghost-button compact"
+                        type="button"
+                        title={file.url ? `Baixar ${file.name}` : `${file.name} (sem URL)`}
+                        disabled={!file.url}
+                        onClick={() => {
+                          if (!file.url) return;
+                          const a = document.createElement("a");
+                          a.href = file.url;
+                          a.download = file.name;
+                          a.target = "_blank";
+                          a.rel = "noopener noreferrer";
+                          a.click();
+                        }}
+                        style={{ maxWidth: 150, opacity: file.url ? 1 : 0.5 }}
+                      >
+                        <Download size={13} />
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 100 }}>
+                          {file.name}
+                        </span>
+                      </button>
+                    ))}
+                    <label
+                      className="ghost-button compact"
+                      title="Enviar arquivo para este item"
+                      style={{ cursor: "pointer", flexShrink: 0 }}
+                    >
+                      <Upload size={13} />
+                      {allItemFiles.length === 0 ? "Enviar" : ""}
+                      <input
+                        type="file"
+                        style={{ display: "none" }}
+                        accept="image/*,application/pdf,.zip"
+                        onChange={async (e) => {
+                          const file = e.currentTarget.files?.[0];
+                          if (!file) return;
+                          const uploaded = await safeUploadFile(onUploadFile, file, "orders");
+                          if (!uploaded) { if (e.currentTarget) e.currentTarget.value = ""; return; }
+                          await onAddArtFile(order, {
+                            productName: item.productName || item.description,
+                            name: uploaded.name,
+                            url: uploaded.url,
+                          });
+                          if (e.currentTarget) e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="order-items-tfoot">
+            <span>Total do pedido</span>
             <strong>{formatCurrency(order.total)}</strong>
           </div>
         </div>
+      </div>
 
-        {artFiles.length ? (
-          <div className="order-receipt-files">
-            <span>Arquivos do pedido</span>
+      <div className="order-details-section">
+        <h3>Detalhes do pedido</h3>
+        <div className="order-details-grid">
+          <div className="order-detail-info">
+            <ClipboardList size={20} color="#9ca3af" />
             <div>
-              {artFiles.slice(0, 4).map((file) => (
-                <button
-                  className="ghost-button compact"
-                  key={file.id}
-                  type="button"
-                  disabled={!file.url}
-                  onClick={() => file.url && window.open(file.url, "_blank", "noopener,noreferrer")}
-                >
-                  <Download size={15} />
-                  {file.name}
-                </button>
-              ))}
+              <span>ID do pedido</span>
+              <strong>{receiptNumber}</strong>
             </div>
           </div>
-        ) : null}
-
-        {shareFeedback ? <small className="order-share-feedback">{shareFeedback}</small> : null}
-      </section>
-      <div className="order-detail-head">
-        <div>
-          <span>Cliente</span>
-          <strong>{order.customer}</strong>
+          <div className="order-detail-info">
+            <FileText size={20} color="#9ca3af" />
+            <div>
+              <span>Documento</span>
+              <strong>{client?.document || "00000000000"}</strong>
+            </div>
+          </div>
+          <div className="order-detail-info">
+            <ArrowUpRight size={20} color="#9ca3af" />
+            <div>
+              <span>Prioridade</span>
+              <strong>{order.priority}</strong>
+            </div>
+          </div>
+          <div className="order-detail-info">
+            <Settings size={20} color="#9ca3af" />
+            <div>
+              <span>Status</span>
+              <StatusPill status={order.status} />
+            </div>
+          </div>
+          <div className="order-detail-info">
+            <Clock3 size={20} color="#9ca3af" />
+            <div>
+              <span>Criado em</span>
+              <strong>{order.createdAt || "Hoje"} {order.time ? ` ${order.time}` : ""}</strong>
+            </div>
+          </div>
+          <div className="order-detail-info">
+            <RefreshCw size={20} color="#9ca3af" />
+            <div>
+              <span>Atualizado em</span>
+              <strong>{order.createdAt || "Hoje"} {order.time ? ` ${order.time}` : ""}</strong>
+            </div>
+          </div>
         </div>
-        <StatusPill status={order.status} />
-      </div>
-      <div className="order-detail-grid">
-        <SettingsLine icon={Package} label="Produto" value={order.product} />
-        <SettingsLine icon={Factory} label="Setor" value={order.sector} />
-        <SettingsLine icon={CalendarDays} label="Entrega" value={order.delivery} />
-        <SettingsLine icon={ShoppingBag} label="Quantidade" value={`${formatNumber(order.quantity)} un`} />
-        <SettingsLine icon={CircleDollarSign} label="Total" value={formatCurrency(order.total)} />
-        <SettingsLine icon={ArrowUpRight} label="Prioridade" value={order.priority} />
       </div>
       {order.fractions.length ? (
         <div className="order-detail-fractions">
@@ -11825,7 +12192,7 @@ function OrderDetail({
           {activeTab === "log" ? <LogPanel entries={orderLogEntries} /> : null}
         </div>
 
-        <DocumentFinanceSummary subtotal={order.total} paymentEntries={paymentEntries} />
+        <DocumentFinanceSummary subtotal={order.total} paymentEntries={paymentEntries} onAddPayment={onAddPayment} />
       </div>
     </div>
   );
@@ -11835,10 +12202,12 @@ function QuoteDetail({
   quote,
   clients,
   finance,
+  onConvert,
 }: {
   quote: Quote;
   clients: Client[];
   finance: FinanceEntry[];
+  onConvert?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<DocumentDetailTab>("summary");
   const client = clients.find((item) => item.id === quote.customerId);
@@ -11878,6 +12247,11 @@ function QuoteDetail({
           <strong>{quote.customerEmail || client?.email || "Não informado"}</strong>
         </div>
         <div className="document-client-actions">
+          {onConvert ? (
+            <button className="icon-button" type="button" title="Converter em Pedido" onClick={onConvert}>
+              <ClipboardList size={16} />
+            </button>
+          ) : null}
           <button className="icon-button" type="button" title="Enviar e-mail" disabled={!quote.customerEmail && !client?.email}>
             <Mail size={16} />
           </button>
@@ -12383,10 +12757,12 @@ function ModalHeader({
   icon: Icon,
   title,
   subtitle,
+  children,
 }: {
   icon: LucideIcon;
   title: string;
-  subtitle: string;
+  subtitle?: string;
+  children?: ReactNode;
 }) {
   return (
     <div className="modal-header">
@@ -12395,7 +12771,8 @@ function ModalHeader({
       </span>
       <div>
         <h2>{title}</h2>
-        <p>{subtitle}</p>
+        {subtitle ? <p>{subtitle}</p> : null}
+        {children}
       </div>
     </div>
   );

@@ -7,13 +7,16 @@ import {
   CheckCircle2,
   Clock3,
   ClipboardList,
+  Download,
   FileText,
   Loader2,
   Mail,
   Package,
   Phone,
   ShieldCheck,
+  Upload,
   User,
+  X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
@@ -27,6 +30,7 @@ type PublicOrderItem = {
   total: number | string | null;
   status?: string | null;
   dueDate?: string | null;
+  artFiles?: Array<{ id: string; name: string; url: string; size?: string }>;
 };
 
 type PublicOrderCustomer = {
@@ -154,8 +158,12 @@ export default function PublicOrderPage() {
   const [accepted, setAccepted] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState("");
+  const [uploadingFile, setUploadingFile] = useState<string | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
 
   const items = useMemo(() => order?.order_items ?? [], [order?.order_items]);
+  const itemsWithoutFiles = useMemo(() => items.filter((item) => !item.artFiles || item.artFiles.length === 0), [items]);
+  const hasItemsWithoutFiles = itemsWithoutFiles.length > 0;
   const subtotal = useMemo(
     () => order?.subtotal ?? items.reduce((sum, item) => sum + numeric(item.total), 0),
     [items, order?.subtotal],
@@ -406,6 +414,7 @@ export default function PublicOrderPage() {
                       <span>Un.</span>
                       <span>Valor Unit.</span>
                       <span>Valor Total</span>
+                      <span>Arquivo</span>
                     </div>
                     {items.map((item) => (
                       <div className="public-quote-table-row" key={item.id}>
@@ -415,6 +424,19 @@ export default function PublicOrderPage() {
                         <span>un</span>
                         <span>{money(item.unitPrice)}</span>
                         <strong>{money(item.total)}</strong>
+                        <span>
+                          {item.artFiles && item.artFiles.length > 0 ? (
+                            <a
+                              href={item.artFiles[0].url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="icon-button"
+                              title="Baixar arquivo"
+                            >
+                              <Download size={16} />
+                            </a>
+                          ) : null}
+                        </span>
                       </div>
                     ))}
                     {items.length === 0 ? (
@@ -425,6 +447,7 @@ export default function PublicOrderPage() {
                         <span />
                         <span />
                         <strong>{money(0)}</strong>
+                        <span />
                       </div>
                     ) : null}
                   </div>
@@ -470,6 +493,91 @@ export default function PublicOrderPage() {
                   <Clock3 size={18} />
                   Entrega prevista: {deliveryDate}
                 </div>
+
+                {hasItemsWithoutFiles && !showUpload ? (
+                  <button
+                    className="upload-art-button"
+                    type="button"
+                    onClick={() => setShowUpload(true)}
+                  >
+                    <Upload size={18} />
+                    Enviar arquivo de arte
+                  </button>
+                ) : null}
+
+                {showUpload && hasItemsWithoutFiles ? (
+                  <div className="upload-art-section">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <h3 style={{ margin: 0, fontSize: "0.95rem" }}>Enviar arquivo de arte</h3>
+                      <button
+                        type="button"
+                        onClick={() => setShowUpload(false)}
+                        style={{ border: "none", background: "transparent", cursor: "pointer", color: "#6b7280" }}
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                    <input
+                      type="file"
+                      id="art-file-upload"
+                      accept=".pdf,.zip,.jpg,.jpeg,.png,.webp,.gif,.ai,.psd,.cdr"
+                      style={{ display: "none" }}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        
+                        const itemId = itemsWithoutFiles[0].id;
+                        setUploadingFile(itemId);
+                        
+                        try {
+                          const formData = new FormData();
+                          formData.append("file", file);
+                          formData.append("orderId", orderId);
+                          formData.append("itemId", itemId);
+                          formData.append("token", token);
+                          
+                          const response = await fetch(`${API_BASE_URL}/public/orders/${encodeURIComponent(orderId)}/upload-art`, {
+                            method: "POST",
+                            body: formData,
+                          });
+                          
+                          if (response.ok) {
+                            // Reload order to show updated files
+                            window.location.reload();
+                          } else {
+                            alert("Erro ao enviar arquivo. Tente novamente.");
+                          }
+                        } catch (err) {
+                          alert("Erro ao enviar arquivo. Tente novamente.");
+                        } finally {
+                          setUploadingFile(null);
+                        }
+                      }}
+                    />
+                    <label
+                      htmlFor="art-file-upload"
+                      className="upload-art-dropzone"
+                      style={{
+                        border: "2px dashed #d1d5db",
+                        borderRadius: "8px",
+                        padding: "20px",
+                        textAlign: "center",
+                        cursor: "pointer",
+                        display: "block",
+                        background: "#f9fafb",
+                      }}
+                    >
+                      {uploadingFile ? (
+                        <Loader2 size={20} className="spin" style={{ margin: "0 auto" }} />
+                      ) : (
+                        <Upload size={20} style={{ opacity: 0.4, margin: "0 auto" }} />
+                      )}
+                      <p style={{ fontSize: "0.8rem", marginTop: "8px", opacity: 0.6 }}>
+                        {uploadingFile ? "Enviando..." : "Clique para selecionar arquivo (PDF, ZIP, JPG, PNG, AI, PSD, CDR)"}
+                      </p>
+                    </label>
+                  </div>
+                ) : null}
 
                 {accepted || acceptedAt ? (
                   <div className="public-quote-accepted">
