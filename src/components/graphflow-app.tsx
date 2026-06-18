@@ -5000,6 +5000,7 @@ function OrdersView({
   });
   const priorityOptions = Array.from(new Set(orders.map((order) => order.priority)));
   const totalValue = visibleOrders.reduce((sum, order) => sum + order.total, 0);
+  const totalItems = visibleOrders.reduce((sum, order) => sum + (order.quantity || 0), 0);
   const productionCount = visibleOrders.filter((order) => order.status === "production").length;
   const deliveredCount = visibleOrders.filter((order) => isDeliveredOrderStatus(order.status)).length;
   const deliveryDays = visibleOrders
@@ -5020,6 +5021,13 @@ function OrdersView({
           tone="#6b45ff"
         />
         <OrderMetricCard
+          icon={Package}
+          title="Total de itens"
+          value={formatNumber(totalItems)}
+          detail={`${percentText(totalItems, totalItems)} de itens`}
+          tone="#ff7208"
+        />
+        <OrderMetricCard
           icon={ChartNoAxesColumn}
           title="Valor total"
           value={formatCurrency(totalValue)}
@@ -5032,13 +5040,6 @@ function OrdersView({
           value={formatNumber(productionCount)}
           detail={`${percentText(productionCount, visibleOrders.length)} do total`}
           tone="#236dff"
-        />
-        <OrderMetricCard
-          icon={Package}
-          title="Entregues"
-          value={formatNumber(deliveredCount)}
-          detail={`${percentText(deliveredCount, visibleOrders.length)} do total`}
-          tone="#ff7208"
         />
         <OrderMetricCard
           icon={CalendarDays}

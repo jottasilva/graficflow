@@ -1,8 +1,9 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowRight,
-  BadgeCheck,
   Camera,
   ChevronDown,
   CirclePlus,
@@ -11,122 +12,88 @@ import {
   Mail,
   Menu,
   MessageCircle,
-  PackageCheck,
-  Palette,
+  Package,
   Phone,
+  Plus,
   Search,
   Send,
-  Settings2,
-  ShieldCheck,
   ShoppingCart,
   Star,
-  Truck,
-  Upload,
   User,
-  Users,
-  WalletCards,
 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { defaultLandingPageConfig } from "@/lib/graphflow-data";
+import type { LandingPageConfig } from "@/lib/graphflow-data";
+import { LANDING_ICON_MAP } from "@/lib/landing-icons";
+import { CartSidebar } from "./cart-sidebar";
+import type { CartItem } from "@/lib/cart-store";
+import { loadCart, saveCart, getCartCount, getCartTotal, formatPrice } from "@/lib/cart-store";
 
 const GRAPHFLOW_LOGO_SRC = "/assets/d2513524-f181-4a63-9fff-94a95de5aacf.png";
 
-const categories = [
-  ["Cartões de Visita", "A partir de R$ 29,90", "/assets/category-business-cards.jpg"],
-  ["Folders", "A partir de R$ 99,90", "/assets/category-folders.jpg"],
-  ["Banners", "A partir de R$ 59,90", "/assets/category-banners.jpg"],
-  ["Adesivos", "A partir de R$ 49,90", "/assets/category-stickers.jpg"],
-  ["Convites", "A partir de R$ 89,90", "/assets/category-invites.jpg"],
-  ["Brindes", "A partir de R$ 19,90", "/assets/category-mugs.jpg"],
-  ["Embalagens", "A partir de R$ 129,90", "/assets/category-packages.jpg"],
-  ["Placas", "A partir de R$ 69,90", "/assets/category-plates.jpg"],
-] as const;
-
-const products = [
-  {
-    tag: "MAIS VENDIDO",
-    image: "/assets/category-business-cards.jpg",
-    title: "Cartão de Visita Couchê 300g",
-    specs: "4x0 cores · Verniz Total Frente",
-    oldPrice: "",
-    price: "R$ 29,90",
-    reviews: "124",
-  },
-  {
-    tag: "15% OFF",
-    image: "/assets/category-folders.jpg",
-    title: "Folder Couchê 150g",
-    specs: "15x21cm · 4x4 cores · Verniz Total",
-    oldPrice: "R$ 129,90",
-    price: "R$ 109,90",
-    reviews: "86",
-  },
-  {
-    tag: "NOVO",
-    image: "/assets/category-stickers.jpg",
-    title: "Adesivo Redondo",
-    specs: "5x5cm · Vinil · 4x0 cores",
-    oldPrice: "",
-    price: "R$ 49,90",
-    reviews: "53",
-  },
-  {
-    tag: "MAIS VENDIDO",
-    image: "/assets/category-banners.jpg",
-    title: "Banner Lona 440g",
-    specs: "80x120cm · 4x0 cores",
-    oldPrice: "",
-    price: "R$ 59,90",
-    reviews: "71",
-  },
-  {
-    tag: "10% OFF",
-    image: "/assets/category-mugs.jpg",
-    title: "Caneca Personalizada",
-    specs: "Cerâmica · 325ml · 4x0 cores",
-    oldPrice: "R$ 39,90",
-    price: "R$ 35,90",
-    reviews: "37",
-  },
-  {
-    tag: "NOVO",
-    image: "/assets/category-packages.jpg",
-    title: "Caixa Personalizada",
-    specs: "18x18x10cm · Kraft · 4x0 cores",
-    oldPrice: "",
-    price: "R$ 129,90",
-    reviews: "28",
-  },
-] as const;
-
-const testimonials = [
-  ["Juliana Andrade", "Empresária", "A qualidade dos materiais é impecável! Atendimento rápido e entrega antes do prazo.", "JA"],
-  ["Carlos Mendes", "Designer", "Já sou cliente há anos e nunca me decepcionei. Compromisso e qualidade definem a Gráfica Exemplo.", "CM"],
-  ["Fernanda Lima", "Marketing", "Os melhores preços e a qualidade que meu negócio precisa. Parceria que só cresce!", "FL"],
-  ["Ricardo Souza", "Publicitário", "Fácil de enviar a arte, acompanhar o pedido e o resultado é sempre perfeito!", "RS"],
-] as const;
-
-const heroSlides = [
-  "/assets/hero-design-studio.jpg",
-  "/assets/hero-print-machine.jpg",
-] as const;
+const GRAPHFLOW_TENANT_ID = "graphflow-main";
 
 export function PrintShopHome() {
+  const [config, setConfig] = useState<LandingPageConfig | null>(null);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [cartCount, setCartCount] = useState(0);
+  const [cartTotal, setCartTotal] = useState("R$ 0,00");
+
+  useEffect(() => {
+    const params = new URLSearchParams({ tenantId: GRAPHFLOW_TENANT_ID });
+    fetch(`${process.env.NEXT_PUBLIC_GRAPHFLOW_API_URL ?? ""}/public/landing-page?${params.toString()}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => setConfig(data?.config ?? defaultLandingPageConfig))
+      .catch(() => setConfig(defaultLandingPageConfig));
+
+    const syncCart = () => {
+      const cart = loadCart();
+      setCartCount(getCartCount(cart));
+      setCartTotal(formatPrice(getCartTotal(cart)));
+    };
+    syncCart();
+    window.addEventListener("cart-updated", syncCart);
+    return () => window.removeEventListener("cart-updated", syncCart);
+  }, []);
+
+  function addToCart(product: LandingPageConfig["products"][number]) {
+    const items = loadCart();
+    const existing = items.find((i) => i.id === product.id);
+    if (existing) {
+      existing.quantity += 1;
+    } else {
+      items.push({
+        id: product.id,
+        title: product.title,
+        price: product.price,
+        imageUrl: product.imageUrl,
+        quantity: 1,
+        oldPrice: product.oldPrice,
+        tag: product.tag,
+      });
+    }
+    saveCart(items);
+  }
+
+  const c = config ?? defaultLandingPageConfig;
+
   return (
     <main className="store-page">
-      <TopStrip />
-      <StoreHeader />
+      <TopStrip config={c} />
+      <StoreHeader config={c} cartCount={cartCount} cartTotal={cartTotal} onCartOpen={() => setCartOpen(true)} />
+      <CartSidebar open={cartOpen} onClose={() => setCartOpen(false)} />
 
       <section className="store-container">
-        <StoreNav />
+        <StoreNav config={c} />
 
         <section className="store-hero">
           <div className="store-hero-slides" aria-hidden="true">
-            {heroSlides.map((src, index) => (
+            {c.hero.slides.filter((s) => s.active).map((slide) => (
               <Image
-                key={src}
-                src={src}
-                alt=""
+                key={slide.id}
+                src={slide.imageUrl}
+                alt={slide.alt}
                 fill
-                priority={index === 0}
                 sizes="(max-width: 900px) 100vw, 1200px"
                 className="store-hero-image"
               />
@@ -134,52 +101,51 @@ export function PrintShopHome() {
           </div>
           <div className="store-hero-copy">
             <h1>
-              Soluções gráficas
+              {c.hero.titlePrefix}
               <strong>
-                para impulsionar
-                <br />
-                seu negócio
+                {c.hero.titleHighlight.split("\\n").map((line, i) => (
+                  <span key={i}>{line}<br /></span>
+                ))}
               </strong>
             </h1>
-            <p>Da criação à impressão, entregamos qualidade, agilidade e acabamento impecável.</p>
+            <p>{c.hero.description}</p>
             <div className="store-hero-actions">
-              <Link className="store-primary" href="#produtos">
-                Conheça nossos produtos
+              <Link className="store-primary" href={c.hero.primaryCta.href}>
+                {c.hero.primaryCta.label}
                 <ArrowRight size={18} />
               </Link>
-              <Link className="store-secondary" href="https://wa.me/5511999999999">
-                Fazer orçamento
+              <Link className="store-secondary" href={c.hero.secondaryCta.href}>
+                {c.hero.secondaryCta.label}
                 <MessageCircle size={18} />
               </Link>
             </div>
           </div>
           <div className="store-hero-features">
-            <Feature icon={ShieldCheck} title="Qualidade Garantida" text="Materiais de primeira linha" />
-            <Feature icon={Truck} title="Entrega Rápida" text="Para todo o Brasil" />
-            <Feature icon={Users} title="Atendimento Especializado" text="Suporte via WhatsApp" />
-            <Feature icon={WalletCards} title="Pagamento Seguro" text="Seus dados protegidos" />
+            {c.hero.features.filter((f) => f.active).map((feature) => (
+              <Feature key={feature.id} icon={feature.icon} title={feature.title} text={feature.text} />
+            ))}
           </div>
           <div className="store-dots">
-            <span />
-            <span />
-            <span />
+            {c.hero.slides.filter((s) => s.active).map((_, i) => (
+              <span key={i} />
+            ))}
           </div>
         </section>
 
         <section className="store-process">
-          <ProcessStep icon={Upload} title="Envie sua arte" text="Faça upload do seu arquivo nos formatos: PDF, CDR, AI, PSD, PNG" />
-          <ProcessStep icon={Settings2} title="Personalize" text="Escolha as opções do produto e personalize do seu jeito" />
-          <ProcessStep icon={PackageCheck} title="Receba em casa" text="Entregamos para todo o Brasil com segurança e agilidade" />
+          {c.process.filter((p) => p.active).map((step) => (
+            <ProcessStep key={step.id} icon={step.icon} title={step.title} text={step.text} />
+          ))}
         </section>
 
         <SectionTitle title="Categorias em destaque" action="Ver todas as categorias" />
         <section className="category-grid">
-          {categories.map(([title, price, image]) => (
-            <article className="category-card" key={title}>
-              <Image src={image} alt={title} width={360} height={260} sizes="160px" />
+          {c.categories.filter((cat) => cat.active).map((cat) => (
+            <article className="category-card" key={cat.id}>
+              <Image src={cat.imageUrl} alt={cat.title} width={360} height={260} sizes="160px" />
               <div>
-                <strong>{title}</strong>
-                <span>{price}</span>
+                <strong>{cat.title}</strong>
+                <span>{cat.price}</span>
               </div>
             </article>
           ))}
@@ -189,20 +155,20 @@ export function PrintShopHome() {
           <div className="product-head">
             <h2>Produtos mais vendidos</h2>
             <nav aria-label="Filtros de produtos">
-              <a className="active" href="#produtos">Mais vendidos</a>
-              <a href="#produtos">Novidades</a>
-              <a href="#produtos">Em promoção</a>
+              <a className="active" href="/produtos">Mais vendidos</a>
+              <a href="/novidades">Novidades</a>
+              <a href="/promocoes">Em promoção</a>
             </nav>
           </div>
           <div className="product-grid">
-            {products.map((product) => (
-              <article className="product-card" key={product.title}>
+            {c.products.filter((p) => p.active).map((product) => (
+              <article className="product-card" key={product.id}>
                 <div className="product-image">
                   <span>{product.tag}</span>
                   <button type="button" aria-label="Favoritar produto" title="Favoritar produto">
                     <Heart size={18} />
                   </button>
-                  <Image src={product.image} alt={product.title} width={360} height={260} sizes="190px" />
+                  <Image src={product.imageUrl} alt={product.title} width={360} height={260} sizes="190px" />
                 </div>
                 <h3>{product.title}</h3>
                 <p>{product.specs}</p>
@@ -215,7 +181,10 @@ export function PrintShopHome() {
                 <small>A partir de</small>
                 {product.oldPrice ? <del>{product.oldPrice}</del> : null}
                 <strong>{product.price}</strong>
-                <button className="option-button" type="button">Ver opções</button>
+                <button className="option-button" type="button" onClick={() => addToCart(product)}>
+                  <Plus size={16} />
+                  Adicionar ao carrinho
+                </button>
               </article>
             ))}
           </div>
@@ -227,49 +196,34 @@ export function PrintShopHome() {
           </h2>
           <p>Tecnologia, experiência e dedicação para entregar soluções gráficas que impulsionam o seu projeto e fortalecem a sua marca.</p>
           <div>
-            <Benefit
-              icon={BadgeCheck}
-              label="Qualidade"
-              title="Impressão de Qualidade"
-              text="Equipamentos modernos e materiais de alta performance para garantir acabamentos impecáveis e cores vibrantes."
-            />
-            <Benefit
-              icon={Palette}
-              label="Precisão"
-              title="Cores Vivas e Precisão"
-              text="Tecnologia avançada de calibração que garante fidelidade de cores e consistência em todos os materiais."
-            />
-            <Benefit
-              icon={ShieldCheck}
-              label="Confiança"
-              title="Prazos que Você Pode Confiar"
-              text="Produção ágil e logística eficiente para entregar seu pedido no prazo combinado, com rastreamento em todas as etapas."
-            />
-            <Benefit
-              icon={Users}
-              label="Atendimento"
-              title="Atendimento Humanizado"
-              text="Nossa equipe está pronta para atender sua necessidade e oferecer o melhor suporte do início ao fim do projeto."
-            />
+            {c.benefits.filter((b) => b.active).map((benefit) => (
+              <Benefit
+                key={benefit.id}
+                icon={benefit.icon}
+                label={benefit.label}
+                title={benefit.title}
+                text={benefit.text}
+              />
+            ))}
           </div>
         </section>
 
         <SectionTitle title="O que nossos clientes dizem" action="Ver todas avaliações" rating />
         <section className="testimonial-grid">
-          {testimonials.map(([name, role, text, initials]) => (
-            <article className="testimonial-card" key={name}>
-              <div className="quote-mark">“</div>
+          {c.testimonials.filter((t) => t.active).map((testimonial) => (
+            <article className="testimonial-card" key={testimonial.id}>
+              <div className="quote-mark">"</div>
               <div className="stars">
                 {[1, 2, 3, 4, 5].map((star) => (
                   <Star key={star} size={14} fill="currentColor" />
                 ))}
               </div>
-              <p>{text}</p>
+              <p>{testimonial.text}</p>
               <div className="testimonial-author">
-                <span>{initials}</span>
+                <span>{testimonial.initials}</span>
                 <div>
-                  <strong>{name}</strong>
-                  <small>{role}</small>
+                  <strong>{testimonial.name}</strong>
+                  <small>{testimonial.role}</small>
                 </div>
               </div>
             </article>
@@ -280,17 +234,13 @@ export function PrintShopHome() {
           <div>
             <MessageCircle size={26} />
             <div>
-              <strong>Receba novidades e promoções exclusivas!</strong>
-              <span>Cadastre-se e ganhe 10% de desconto na sua primeira compra.</span>
+              <strong>{c.newsletter.title}</strong>
+              <span>{c.newsletter.subtitle}</span>
             </div>
           </div>
           <form action="https://api.whatsapp.com/send" target="_blank">
-            <input name="phone" type="hidden" value="5511999999999" />
-            <input
-              name="text"
-              type="hidden"
-              value="Olá! Quero receber novidades e promoções exclusivas da Gráfica Exemplo pelo WhatsApp."
-            />
+            <input name="phone" type="hidden" value={c.newsletter.whatsapp} />
+            <input name="text" type="hidden" value={c.newsletter.message} />
             <label className="sr-only" htmlFor="newsletter-whatsapp">Seu WhatsApp</label>
             <input id="newsletter-whatsapp" name="whatsapp" type="tel" placeholder="Seu WhatsApp" />
             <button type="submit">
@@ -301,33 +251,32 @@ export function PrintShopHome() {
         </section>
       </section>
 
-      <StoreFooter />
+      <StoreFooter config={c} />
 
-      <Link className="whatsapp-float" href="https://wa.me/5511999999999" aria-label="WhatsApp">
+      <Link className="whatsapp-float" href={c.whatsappUrl} aria-label="WhatsApp">
         <MessageCircle size={26} />
       </Link>
     </main>
   );
 }
 
-function TopStrip() {
+function TopStrip({ config }: { config: LandingPageConfig }) {
   return (
     <div className="top-strip">
       <div className="store-container">
-        <span>Bem-vindo à Gráfica Exemplo!</span>
+        <span>{config.topStrip.welcome}</span>
         <span>
           <Phone size={14} />
-          Atendimento: (11) 99999-9999
+          {config.topStrip.phone}
         </span>
         <span>
           <Mail size={14} />
-          contato@graficaexemplo.com.br
+          {config.topStrip.email}
         </span>
         <nav>
-          <a href="#sobre">Sobre nós</a>
-          <a href="#como-funciona">Como funciona</a>
-          <a href="#pedidos">Meus pedidos</a>
-          <a href="#contato">Fale conosco</a>
+          {config.topStrip.links.map((link, i) => (
+            <a key={i} href={link.href}>{link.label}</a>
+          ))}
           <Camera className="social-icon" size={15} />
           <Send className="social-icon" size={15} />
         </nav>
@@ -336,23 +285,23 @@ function TopStrip() {
   );
 }
 
-function StoreHeader() {
+function StoreHeader({ config, cartCount, cartTotal, onCartOpen }: { config: LandingPageConfig; cartCount: number; cartTotal: string; onCartOpen: () => void }) {
   return (
     <header className="store-header">
       <div className="store-container">
         <Link className="store-brand" href="/">
           <Image
-            src={GRAPHFLOW_LOGO_SRC}
-            alt="GraficFlow"
-            width={190}
-            height={48}
+            src={config.brand.logoUrl || GRAPHFLOW_LOGO_SRC}
+            alt={config.brand.name}
+            width={280}
+            height={70}
             className="store-brand-logo"
-            style={{ width: 190, height: 48, objectFit: "contain" }}
+            style={{ width: 280, height: 70, objectFit: "contain" }}
             priority
           />
           <div>
-            <strong>Gráfica Exemplo</strong>
-            <small>Impressão de qualidade</small>
+            <strong>{config.brand.name}</strong>
+            <small>{config.brand.tagline}</small>
           </div>
         </Link>
 
@@ -368,21 +317,21 @@ function StoreHeader() {
         </form>
 
         <div className="store-account">
-          <Link href="/painel">
-            <User size={28} />
+          <Link href="/meus-pedidos">
+            <Package size={28} />
             <span>
-              <strong>Entrar</strong>
-              Minha conta
+              <strong>Meus Pedidos</strong>
+              Acompanhar
             </span>
           </Link>
-          <button type="button">
+          <button type="button" onClick={onCartOpen}>
             <span className="cart-icon">
               <ShoppingCart size={30} />
-              <i>3</i>
+              {cartCount > 0 ? <i>{cartCount}</i> : null}
             </span>
             <span>
               <strong>Carrinho</strong>
-              R$ 235,00
+              {cartTotal}
             </span>
           </button>
         </div>
@@ -391,33 +340,31 @@ function StoreHeader() {
   );
 }
 
-function StoreNav() {
+function StoreNav({ config }: { config: LandingPageConfig }) {
   return (
     <nav className="store-nav" aria-label="Categorias principais">
       <button type="button">
         <Menu size={20} />
         Todas as Categorias
       </button>
-      <a className="active" href="#">Início</a>
-      <a href="#produtos">Todos os Produtos</a>
-      <a href="#produtos">Personalizados</a>
-      <a href="#produtos">Promoções</a>
-      <a href="#produtos">Novidades</a>
-      <a href="#produtos">Catálogo Online</a>
-      <a href="#produtos">Upload de Arte</a>
+      {config.navigation.map((link, i) => (
+        <a key={i} href={link.href} className={i === 0 ? "active" : ""}>{link.label}</a>
+      ))}
     </nav>
   );
 }
 
 function Feature({
-  icon: Icon,
+  icon,
   title,
   text,
 }: {
-  icon: typeof ShieldCheck;
+  icon: string;
   title: string;
   text: string;
 }) {
+  const Icon = LANDING_ICON_MAP[icon];
+  if (!Icon) return null;
   return (
     <div className="store-feature">
       <Icon size={20} />
@@ -430,14 +377,16 @@ function Feature({
 }
 
 function ProcessStep({
-  icon: Icon,
+  icon,
   title,
   text,
 }: {
-  icon: typeof Upload;
+  icon: string;
   title: string;
   text: string;
 }) {
+  const Icon = LANDING_ICON_MAP[icon];
+  if (!Icon) return null;
   return (
     <article>
       <div>
@@ -474,7 +423,7 @@ function SectionTitle({
           </p>
         ) : null}
       </div>
-      <a href="#produtos">
+      <a href="/produtos">
         {action}
         <CirclePlus size={17} />
       </a>
@@ -483,16 +432,18 @@ function SectionTitle({
 }
 
 function Benefit({
-  icon: Icon,
+  icon,
   label,
   title,
   text,
 }: {
-  icon: typeof BadgeCheck;
+  icon: string;
   label: string;
   title: string;
   text: string;
 }) {
+  const Icon = LANDING_ICON_MAP[icon];
+  if (!Icon) return null;
   return (
     <article>
       <em>{label}</em>
@@ -510,41 +461,35 @@ function Benefit({
   );
 }
 
-function StoreFooter() {
+function StoreFooter({ config }: { config: LandingPageConfig }) {
   return (
     <footer className="store-footer">
       <div className="store-container footer-grid">
         <div>
           <Link className="store-brand footer-brand" href="/">
             <Image
-              src={GRAPHFLOW_LOGO_SRC}
-              alt="GraficFlow"
+              src={config.brand.logoUrl || GRAPHFLOW_LOGO_SRC}
+              alt={config.brand.name}
               width={190}
               height={48}
               className="store-brand-logo"
               style={{ width: 190, height: 48, objectFit: "contain" }}
             />
             <div>
-              <strong>Gráfica Exemplo</strong>
-              <small>Impressão de qualidade</small>
+              <strong>{config.brand.name}</strong>
+              <small>{config.brand.tagline}</small>
             </div>
           </Link>
-          <p>Soluções gráficas completas para impulsionar seu negócio com qualidade, agilidade e preço justo.</p>
+          <p>{config.footer.description}</p>
           <div className="socials">
-            <a href="#" aria-label="Instagram">
-              <SocialLogo type="instagram" />
-            </a>
-            <a href="#" aria-label="Facebook">
-              <SocialLogo type="facebook" />
-            </a>
-            <a href="https://wa.me/5511999999999" aria-label="WhatsApp">
-              <SocialLogo type="whatsapp" />
-            </a>
+            <a href="#" aria-label="Instagram"><SocialLogo type="instagram" /></a>
+            <a href="#" aria-label="Facebook"><SocialLogo type="facebook" /></a>
+            <a href={config.whatsappUrl} aria-label="WhatsApp"><SocialLogo type="whatsapp" /></a>
           </div>
         </div>
-        <FooterColumn title="Institucional" items={["Sobre nós", "Como funciona", "Trabalhe conosco", "Política de qualidade", "Sustentabilidade"]} />
-        <FooterColumn title="Ajuda" items={["Dúvidas frequentes", "Prazos e entregas", "Formas de pagamento", "Trocas e devoluções", "Fale conosco"]} />
-        <FooterColumn title="Categorias" items={["Todos os produtos", "Cartões de Visita", "Folders", "Banners", "Adesivos", "Ver todas categorias"]} />
+        {config.footer.columns.filter((c) => c.active).map((col) => (
+          <FooterColumn key={col.id} title={col.title} items={col.items} />
+        ))}
         <div>
           <h3>Formas de Pagamento</h3>
           <div className="payment-tags">
@@ -566,13 +511,13 @@ function StoreFooter() {
         </div>
       </div>
       <div className="store-container footer-bottom">
-        <span>© 2025 Gráfica Exemplo · Todos os direitos reservados.</span>
+        <span>{config.footer.copyright}</span>
         <nav>
           <a href="#">Política de Privacidade</a>
           <a href="#">Termos de Uso</a>
           <a href="#">Cookies</a>
         </nav>
-        <span>Desenvolvido por Fluuid Automatize</span>
+        <span>{config.footer.developer}</span>
       </div>
     </footer>
   );
@@ -588,7 +533,6 @@ function SocialLogo({ type }: { type: "instagram" | "facebook" | "whatsapp" }) {
       </svg>
     );
   }
-
   if (type === "facebook") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -596,7 +540,6 @@ function SocialLogo({ type }: { type: "instagram" | "facebook" | "whatsapp" }) {
       </svg>
     );
   }
-
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M12.1 3.2a8.7 8.7 0 0 0-7.4 13.2L3.8 21l4.7-1.2a8.7 8.7 0 1 0 3.6-16.6Zm0 15.7a7 7 0 0 1-3.5-.9l-.3-.2-2.8.7.7-2.7-.2-.3a7 7 0 1 1 6.1 3.4Zm3.9-5.2c-.2-.1-1.3-.6-1.5-.7-.2-.1-.4-.1-.5.1l-.7.8c-.1.2-.3.2-.5.1a5.8 5.8 0 0 1-2.9-2.5c-.2-.3 0-.4.1-.5l.4-.5c.1-.1.1-.3.2-.4s0-.3 0-.4c-.1-.1-.5-1.2-.7-1.7-.2-.4-.4-.4-.5-.4h-.5c-.2 0-.4.1-.6.3-.2.2-.8.8-.8 1.9s.8 2.2.9 2.4c.1.1 1.6 2.5 3.9 3.4 2.3.9 2.3.6 2.7.6.4 0 1.3-.5 1.5-1.1.2-.5.2-1 .1-1.1 0-.1-.2-.2-.4-.3Z" />
@@ -605,14 +548,7 @@ function SocialLogo({ type }: { type: "instagram" | "facebook" | "whatsapp" }) {
 }
 
 function PaymentLogo({ type, label }: { type: "visa" | "mastercard" | "elo" | "pix" | "boleto"; label: string }) {
-  const widths = {
-    visa: 62,
-    mastercard: 62,
-    elo: 62,
-    pix: 62,
-    boleto: 78,
-  };
-
+  const widths = { visa: 62, mastercard: 62, elo: 62, pix: 62, boleto: 78 };
   return (
     <span className={`payment-logo payment-logo-${type}`} role="img" aria-label={label}>
       <Image src={`/assets/payments/${type}.svg`} alt={label} width={widths[type]} height={28} unoptimized />
@@ -626,9 +562,7 @@ function FooterColumn({ title, items }: { title: string; items: string[] }) {
       <h3>{title}</h3>
       <ul>
         {items.map((item) => (
-          <li key={item}>
-            <a href="#">{item}</a>
-          </li>
+          <li key={item}><a href="#">{item}</a></li>
         ))}
       </ul>
     </div>
