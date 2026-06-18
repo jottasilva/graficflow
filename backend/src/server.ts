@@ -71,6 +71,7 @@ import { HttpError } from "./shared/errors/http-error.js";
 import { createSupabaseServiceClient } from "./shared/supabase/client.js";
 import { assertSupabaseOk } from "./shared/supabase/result.js";
 import { randomId } from "./shared/utils/ids.js";
+import { checkRateLimit } from "./shared/utils/rate-limiter.js";
 
 const env = loadEnv();
 const UPLOAD_MAX_BYTES = env.UPLOAD_MAX_MB * 1024 * 1024;
@@ -136,7 +137,6 @@ async function getTenantLandingConfig(tenantId: string) {
 await app.register(helmet);
 await app.register(cookie);
 await app.register(multipart, {
-  addToBody: false,
   limits: {
     fileSize: UPLOAD_MAX_BYTES,
     files: 1,
@@ -292,7 +292,7 @@ app.get("/api/landing-page", async (request) => {
 
 app.patch("/api/landing-page", async (request) => {
   const auth = await authProvider.requireAuth(request);
-  assertPermission(auth, "settings:read");
+  assertPermission(auth, "settings:write");
   const input = landingPageUpdateSchema.parse(request.body);
   assertTenantAccess(auth, input.tenantId);
 
@@ -350,6 +350,15 @@ app.patch("/api/landing-page", async (request) => {
 });
 
 app.post("/api/auth/login", async (request, reply) => {
+  const ip = request.ip;
+  const rateLimit = checkRateLimit(`login:${ip}`, { windowMs: 60_000, maxRequests: 10 });
+  if (!rateLimit.allowed) {
+    return reply.code(429).send({
+      code: "RATE_LIMITED",
+      message: "Muitas tentativas de login. Aguarde e tente novamente.",
+    });
+  }
+
   const input = loginSchema.parse(request.body);
   const tokens = await authService.login(input);
   const auth = await authProvider.verifyToken(tokens.access_token);
@@ -427,12 +436,30 @@ app.post("/api/uploads", async (request, reply) => {
 });
 
 app.post("/api/auth/register", async (request, reply) => {
+  const ip = request.ip;
+  const rateLimit = checkRateLimit(`register:${ip}`, { windowMs: 3600_000, maxRequests: 3 });
+  if (!rateLimit.allowed) {
+    return reply.code(429).send({
+      code: "RATE_LIMITED",
+      message: "Muitas tentativas de cadastro. Aguarde e tente novamente.",
+    });
+  }
+
   const input = registerSchema.parse(request.body);
   const user = await authService.register(input);
   return reply.code(201).send(user);
 });
 
-app.post("/api/auth/recover", async (request) => {
+app.post("/api/auth/recover", async (request, reply) => {
+  const ip = request.ip;
+  const rateLimit = checkRateLimit(`recover:${ip}`, { windowMs: 3600_000, maxRequests: 5 });
+  if (!rateLimit.allowed) {
+    return reply.code(429).send({
+      code: "RATE_LIMITED",
+      message: "Muitas tentativas de recuperacao. Aguarde e tente novamente.",
+    });
+  }
+
   const input = recoverPasswordSchema.parse(request.body);
   return authService.recoverPassword(input);
 });
@@ -476,6 +503,7 @@ app.delete("/api/clients/:id", async (request) => {
 
 app.get("/api/users", async (request) => {
   const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "users:read");
   const input = tenantQuerySchema.parse(request.query);
   return usersService.list(input, auth);
 });
@@ -517,7 +545,6 @@ app.get("/api/products", async (request) => {
 app.post("/api/products", async (request, reply) => {
   const auth = await authProvider.requireAuth(request);
   assertPermission(auth, "products:write");
-  console.log("[DEBUG] request.body type:", typeof request.body, "attributes type:", typeof request.body?.attributes, "attributes value:", JSON.stringify(request.body?.attributes)?.slice(0, 200));
   const input = createProductSchema.parse(request.body);
   const product = await productsService.create(input, auth);
   return reply.code(201).send(product);
@@ -926,6 +953,7 @@ app.delete("/api/files/:id", async (request) => {
 
 app.get("/api/notifications", async (request) => {
   const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "notifications:read");
   const input = tenantQuerySchema.parse(request.query);
   assertTenantAccess(auth, input.tenantId);
 
@@ -944,6 +972,7 @@ app.get("/api/notifications", async (request) => {
 
 app.patch("/api/notifications/:id", async (request) => {
   const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "notifications:write");
   const params = z.object({ id: z.string().min(1) }).parse(request.params);
   const query = tenantQuerySchema.pick({ tenantId: true }).parse(request.query);
   const input = updateNotificationSchema.parse(request.body);
@@ -963,6 +992,7 @@ app.patch("/api/notifications/:id", async (request) => {
 
 app.delete("/api/notifications/:id", async (request) => {
   const auth = await authProvider.requireAuth(request);
+  assertPermission(auth, "notifications:write");
   const params = z.object({ id: z.string().min(1) }).parse(request.params);
   const query = tenantQuerySchema.pick({ tenantId: true }).parse(request.query);
   assertTenantAccess(auth, query.tenantId);
