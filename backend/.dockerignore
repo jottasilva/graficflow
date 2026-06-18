@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+*.log
+*.err.log
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.git
+.gitignore
