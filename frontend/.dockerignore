@@ -1,0 +1,16 @@
+node_modules
+.next
+out
+build
+coverage
+artifacts
+backend
+*.log
+*.err.log
+.env
+.env.*
+.git
+.gitignore
+docker-compose*.yml
+compose*.yml
+README.md

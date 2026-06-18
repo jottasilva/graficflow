@@ -1,0 +1,11 @@
+.env
+.env.*
+node_modules
+dist
+coverage
+*.log
+*.err.log
+supabase/danger
+backend-dev.log
+Dockerfile
+.dockerignore
